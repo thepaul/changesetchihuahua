@@ -16,11 +16,12 @@ func NewSlack(webhook string) *Slack {
 	return &Slack{webhook: webhook}
 }
 
-func (s *Slack) Message(msg string) error {
+func (s *Slack) Message(channel, msg string) error {
 	type body struct {
-		Text string `json:"text"`
+		Text    string `json:"text"`
+		Channel string `json:"channel"`
 	}
-	data, err := json.Marshal(body{Text: msg})
+	data, err := json.Marshal(body{Text: msg, Channel: channel})
 	if err != nil {
 		return err
 	}
