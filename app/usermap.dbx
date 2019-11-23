@@ -1,0 +1,21 @@
+// dbx.v1 golang usermap.dbx .
+
+model gerrit_user (
+    key gerrit_username
+
+    field gerrit_username text
+    field gerrit_email    text ( updatable, nullable )
+    field slack_id        text ( updatable, nullable )
+)
+
+read one (
+    select gerrit_user
+    where  gerrit_user.gerrit_username = ?
+)
+
+create gerrit_user ( noreturn )
+
+update gerrit_user (
+    where gerrit_user.gerrit_username = ?
+    noreturn
+)
