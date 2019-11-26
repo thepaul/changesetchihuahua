@@ -4,18 +4,12 @@ model gerrit_user (
     key gerrit_username
 
     field gerrit_username text
-    field gerrit_email    text ( updatable, nullable )
-    field slack_id        text ( updatable, nullable )
+    field chat_id         text
 )
 
 read one (
-    select gerrit_user
+    select gerrit_user.chat_id
     where  gerrit_user.gerrit_username = ?
 )
 
 create gerrit_user ( noreturn )
-
-update gerrit_user (
-    where gerrit_user.gerrit_username = ?
-    noreturn
-)

@@ -1,6 +1,5 @@
 CREATE TABLE gerrit_users (
 	gerrit_username text NOT NULL,
-	gerrit_email text,
-	slack_id text,
+	chat_id text NOT NULL,
 	PRIMARY KEY ( gerrit_username )
 );

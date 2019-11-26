@@ -274,8 +274,7 @@ func newpostgres(db *DB) *postgresDB {
 func (obj *postgresDB) Schema() string {
 	return `CREATE TABLE gerrit_users (
 	gerrit_username text NOT NULL,
-	gerrit_email text,
-	slack_id text,
+	chat_id text NOT NULL,
 	PRIMARY KEY ( gerrit_username )
 );`
 }
@@ -343,8 +342,7 @@ func newsqlite3(db *DB) *sqlite3DB {
 func (obj *sqlite3DB) Schema() string {
 	return `CREATE TABLE gerrit_users (
 	gerrit_username TEXT NOT NULL,
-	gerrit_email TEXT,
-	slack_id TEXT,
+	chat_id TEXT NOT NULL,
 	PRIMARY KEY ( gerrit_username )
 );`
 }
@@ -411,20 +409,12 @@ nextval:
 
 type GerritUser struct {
 	GerritUsername string
-	GerritEmail    *string
-	SlackId        *string
+	ChatId         string
 }
 
 func (GerritUser) _Table() string { return "gerrit_users" }
 
-type GerritUser_Create_Fields struct {
-	GerritEmail GerritUser_GerritEmail_Field
-	SlackId     GerritUser_SlackId_Field
-}
-
 type GerritUser_Update_Fields struct {
-	GerritEmail GerritUser_GerritEmail_Field
-	SlackId     GerritUser_SlackId_Field
 }
 
 type GerritUser_GerritUsername_Field struct {
@@ -446,69 +436,24 @@ func (f GerritUser_GerritUsername_Field) value() interface{} {
 
 func (GerritUser_GerritUsername_Field) _Column() string { return "gerrit_username" }
 
-type GerritUser_GerritEmail_Field struct {
+type GerritUser_ChatId_Field struct {
 	_set   bool
 	_null  bool
-	_value *string
+	_value string
 }
 
-func GerritUser_GerritEmail(v string) GerritUser_GerritEmail_Field {
-	return GerritUser_GerritEmail_Field{_set: true, _value: &v}
+func GerritUser_ChatId(v string) GerritUser_ChatId_Field {
+	return GerritUser_ChatId_Field{_set: true, _value: v}
 }
 
-func GerritUser_GerritEmail_Raw(v *string) GerritUser_GerritEmail_Field {
-	if v == nil {
-		return GerritUser_GerritEmail_Null()
-	}
-	return GerritUser_GerritEmail(*v)
-}
-
-func GerritUser_GerritEmail_Null() GerritUser_GerritEmail_Field {
-	return GerritUser_GerritEmail_Field{_set: true, _null: true}
-}
-
-func (f GerritUser_GerritEmail_Field) isnull() bool { return !f._set || f._null || f._value == nil }
-
-func (f GerritUser_GerritEmail_Field) value() interface{} {
+func (f GerritUser_ChatId_Field) value() interface{} {
 	if !f._set || f._null {
 		return nil
 	}
 	return f._value
 }
 
-func (GerritUser_GerritEmail_Field) _Column() string { return "gerrit_email" }
-
-type GerritUser_SlackId_Field struct {
-	_set   bool
-	_null  bool
-	_value *string
-}
-
-func GerritUser_SlackId(v string) GerritUser_SlackId_Field {
-	return GerritUser_SlackId_Field{_set: true, _value: &v}
-}
-
-func GerritUser_SlackId_Raw(v *string) GerritUser_SlackId_Field {
-	if v == nil {
-		return GerritUser_SlackId_Null()
-	}
-	return GerritUser_SlackId(*v)
-}
-
-func GerritUser_SlackId_Null() GerritUser_SlackId_Field {
-	return GerritUser_SlackId_Field{_set: true, _null: true}
-}
-
-func (f GerritUser_SlackId_Field) isnull() bool { return !f._set || f._null || f._value == nil }
-
-func (f GerritUser_SlackId_Field) value() interface{} {
-	if !f._set || f._null {
-		return nil
-	}
-	return f._value
-}
-
-func (GerritUser_SlackId_Field) _Column() string { return "slack_id" }
+func (GerritUser_ChatId_Field) _Column() string { return "chat_id" }
 
 func toUTC(t time.Time) time.Time {
 	return t.UTC()
@@ -724,20 +669,23 @@ func (h *__sqlbundle_Hole) Render() string { return h.SQL.Render() }
 // end runtime support for building sql statements
 //
 
+type ChatId_Row struct {
+	ChatId string
+}
+
 func (obj *postgresImpl) CreateNoReturn_GerritUser(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
-	optional GerritUser_Create_Fields) (
+	gerrit_user_chat_id GerritUser_ChatId_Field) (
 	err error) {
 	__gerrit_username_val := gerrit_user_gerrit_username.value()
-	__gerrit_email_val := optional.GerritEmail.value()
-	__slack_id_val := optional.SlackId.value()
+	__chat_id_val := gerrit_user_chat_id.value()
 
-	var __embed_stmt = __sqlbundle_Literal("INSERT INTO gerrit_users ( gerrit_username, gerrit_email, slack_id ) VALUES ( ?, ?, ? )")
+	var __embed_stmt = __sqlbundle_Literal("INSERT INTO gerrit_users ( gerrit_username, chat_id ) VALUES ( ?, ? )")
 
 	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
-	obj.logStmt(__stmt, __gerrit_username_val, __gerrit_email_val, __slack_id_val)
+	obj.logStmt(__stmt, __gerrit_username_val, __chat_id_val)
 
-	_, err = obj.driver.Exec(__stmt, __gerrit_username_val, __gerrit_email_val, __slack_id_val)
+	_, err = obj.driver.Exec(__stmt, __gerrit_username_val, __chat_id_val)
 	if err != nil {
 		return obj.makeErr(err)
 	}
@@ -745,11 +693,11 @@ func (obj *postgresImpl) CreateNoReturn_GerritUser(ctx context.Context,
 
 }
 
-func (obj *postgresImpl) Get_GerritUser_By_GerritUsername(ctx context.Context,
+func (obj *postgresImpl) Get_GerritUser_ChatId_By_GerritUsername(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field) (
-	gerrit_user *GerritUser, err error) {
+	row *ChatId_Row, err error) {
 
-	var __embed_stmt = __sqlbundle_Literal("SELECT gerrit_users.gerrit_username, gerrit_users.gerrit_email, gerrit_users.slack_id FROM gerrit_users WHERE gerrit_users.gerrit_username = ?")
+	var __embed_stmt = __sqlbundle_Literal("SELECT gerrit_users.chat_id FROM gerrit_users WHERE gerrit_users.gerrit_username = ?")
 
 	var __values []interface{}
 	__values = append(__values, gerrit_user_gerrit_username.value())
@@ -757,54 +705,13 @@ func (obj *postgresImpl) Get_GerritUser_By_GerritUsername(ctx context.Context,
 	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
 	obj.logStmt(__stmt, __values...)
 
-	gerrit_user = &GerritUser{}
-	err = obj.driver.QueryRow(__stmt, __values...).Scan(&gerrit_user.GerritUsername, &gerrit_user.GerritEmail, &gerrit_user.SlackId)
+	row = &ChatId_Row{}
+	err = obj.driver.QueryRow(__stmt, __values...).Scan(&row.ChatId)
 	if err != nil {
 		return nil, obj.makeErr(err)
 	}
-	return gerrit_user, nil
+	return row, nil
 
-}
-
-func (obj *postgresImpl) UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.Context,
-	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
-	update GerritUser_Update_Fields) (
-	err error) {
-	var __sets = &__sqlbundle_Hole{}
-
-	var __embed_stmt = __sqlbundle_Literals{Join: "", SQLs: []__sqlbundle_SQL{__sqlbundle_Literal("UPDATE gerrit_users SET "), __sets, __sqlbundle_Literal(" WHERE gerrit_users.gerrit_username = ?")}}
-
-	__sets_sql := __sqlbundle_Literals{Join: ", "}
-	var __values []interface{}
-	var __args []interface{}
-
-	if update.GerritEmail._set {
-		__values = append(__values, update.GerritEmail.value())
-		__sets_sql.SQLs = append(__sets_sql.SQLs, __sqlbundle_Literal("gerrit_email = ?"))
-	}
-
-	if update.SlackId._set {
-		__values = append(__values, update.SlackId.value())
-		__sets_sql.SQLs = append(__sets_sql.SQLs, __sqlbundle_Literal("slack_id = ?"))
-	}
-
-	if len(__sets_sql.SQLs) == 0 {
-		return emptyUpdate()
-	}
-
-	__args = append(__args, gerrit_user_gerrit_username.value())
-
-	__values = append(__values, __args...)
-	__sets.SQL = __sets_sql
-
-	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
-	obj.logStmt(__stmt, __values...)
-
-	_, err = obj.driver.Exec(__stmt, __values...)
-	if err != nil {
-		return obj.makeErr(err)
-	}
-	return nil
 }
 
 func (impl postgresImpl) isConstraintError(err error) (
@@ -837,18 +744,17 @@ func (obj *postgresImpl) deleteAll(ctx context.Context) (count int64, err error)
 
 func (obj *sqlite3Impl) CreateNoReturn_GerritUser(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
-	optional GerritUser_Create_Fields) (
+	gerrit_user_chat_id GerritUser_ChatId_Field) (
 	err error) {
 	__gerrit_username_val := gerrit_user_gerrit_username.value()
-	__gerrit_email_val := optional.GerritEmail.value()
-	__slack_id_val := optional.SlackId.value()
+	__chat_id_val := gerrit_user_chat_id.value()
 
-	var __embed_stmt = __sqlbundle_Literal("INSERT INTO gerrit_users ( gerrit_username, gerrit_email, slack_id ) VALUES ( ?, ?, ? )")
+	var __embed_stmt = __sqlbundle_Literal("INSERT INTO gerrit_users ( gerrit_username, chat_id ) VALUES ( ?, ? )")
 
 	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
-	obj.logStmt(__stmt, __gerrit_username_val, __gerrit_email_val, __slack_id_val)
+	obj.logStmt(__stmt, __gerrit_username_val, __chat_id_val)
 
-	_, err = obj.driver.Exec(__stmt, __gerrit_username_val, __gerrit_email_val, __slack_id_val)
+	_, err = obj.driver.Exec(__stmt, __gerrit_username_val, __chat_id_val)
 	if err != nil {
 		return obj.makeErr(err)
 	}
@@ -856,11 +762,11 @@ func (obj *sqlite3Impl) CreateNoReturn_GerritUser(ctx context.Context,
 
 }
 
-func (obj *sqlite3Impl) Get_GerritUser_By_GerritUsername(ctx context.Context,
+func (obj *sqlite3Impl) Get_GerritUser_ChatId_By_GerritUsername(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field) (
-	gerrit_user *GerritUser, err error) {
+	row *ChatId_Row, err error) {
 
-	var __embed_stmt = __sqlbundle_Literal("SELECT gerrit_users.gerrit_username, gerrit_users.gerrit_email, gerrit_users.slack_id FROM gerrit_users WHERE gerrit_users.gerrit_username = ?")
+	var __embed_stmt = __sqlbundle_Literal("SELECT gerrit_users.chat_id FROM gerrit_users WHERE gerrit_users.gerrit_username = ?")
 
 	var __values []interface{}
 	__values = append(__values, gerrit_user_gerrit_username.value())
@@ -868,67 +774,26 @@ func (obj *sqlite3Impl) Get_GerritUser_By_GerritUsername(ctx context.Context,
 	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
 	obj.logStmt(__stmt, __values...)
 
-	gerrit_user = &GerritUser{}
-	err = obj.driver.QueryRow(__stmt, __values...).Scan(&gerrit_user.GerritUsername, &gerrit_user.GerritEmail, &gerrit_user.SlackId)
+	row = &ChatId_Row{}
+	err = obj.driver.QueryRow(__stmt, __values...).Scan(&row.ChatId)
 	if err != nil {
 		return nil, obj.makeErr(err)
 	}
-	return gerrit_user, nil
+	return row, nil
 
-}
-
-func (obj *sqlite3Impl) UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.Context,
-	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
-	update GerritUser_Update_Fields) (
-	err error) {
-	var __sets = &__sqlbundle_Hole{}
-
-	var __embed_stmt = __sqlbundle_Literals{Join: "", SQLs: []__sqlbundle_SQL{__sqlbundle_Literal("UPDATE gerrit_users SET "), __sets, __sqlbundle_Literal(" WHERE gerrit_users.gerrit_username = ?")}}
-
-	__sets_sql := __sqlbundle_Literals{Join: ", "}
-	var __values []interface{}
-	var __args []interface{}
-
-	if update.GerritEmail._set {
-		__values = append(__values, update.GerritEmail.value())
-		__sets_sql.SQLs = append(__sets_sql.SQLs, __sqlbundle_Literal("gerrit_email = ?"))
-	}
-
-	if update.SlackId._set {
-		__values = append(__values, update.SlackId.value())
-		__sets_sql.SQLs = append(__sets_sql.SQLs, __sqlbundle_Literal("slack_id = ?"))
-	}
-
-	if len(__sets_sql.SQLs) == 0 {
-		return emptyUpdate()
-	}
-
-	__args = append(__args, gerrit_user_gerrit_username.value())
-
-	__values = append(__values, __args...)
-	__sets.SQL = __sets_sql
-
-	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
-	obj.logStmt(__stmt, __values...)
-
-	_, err = obj.driver.Exec(__stmt, __values...)
-	if err != nil {
-		return obj.makeErr(err)
-	}
-	return nil
 }
 
 func (obj *sqlite3Impl) getLastGerritUser(ctx context.Context,
 	pk int64) (
 	gerrit_user *GerritUser, err error) {
 
-	var __embed_stmt = __sqlbundle_Literal("SELECT gerrit_users.gerrit_username, gerrit_users.gerrit_email, gerrit_users.slack_id FROM gerrit_users WHERE _rowid_ = ?")
+	var __embed_stmt = __sqlbundle_Literal("SELECT gerrit_users.gerrit_username, gerrit_users.chat_id FROM gerrit_users WHERE _rowid_ = ?")
 
 	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
 	obj.logStmt(__stmt, pk)
 
 	gerrit_user = &GerritUser{}
-	err = obj.driver.QueryRow(__stmt, pk).Scan(&gerrit_user.GerritUsername, &gerrit_user.GerritEmail, &gerrit_user.SlackId)
+	err = obj.driver.QueryRow(__stmt, pk).Scan(&gerrit_user.GerritUsername, &gerrit_user.ChatId)
 	if err != nil {
 		return nil, obj.makeErr(err)
 	}
@@ -1013,51 +878,35 @@ func (rx *Rx) Rollback() (err error) {
 
 func (rx *Rx) CreateNoReturn_GerritUser(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
-	optional GerritUser_Create_Fields) (
+	gerrit_user_chat_id GerritUser_ChatId_Field) (
 	err error) {
 	var tx *Tx
 	if tx, err = rx.getTx(ctx); err != nil {
 		return
 	}
-	return tx.CreateNoReturn_GerritUser(ctx, gerrit_user_gerrit_username, optional)
+	return tx.CreateNoReturn_GerritUser(ctx, gerrit_user_gerrit_username, gerrit_user_chat_id)
 
 }
 
-func (rx *Rx) Get_GerritUser_By_GerritUsername(ctx context.Context,
+func (rx *Rx) Get_GerritUser_ChatId_By_GerritUsername(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field) (
-	gerrit_user *GerritUser, err error) {
+	row *ChatId_Row, err error) {
 	var tx *Tx
 	if tx, err = rx.getTx(ctx); err != nil {
 		return
 	}
-	return tx.Get_GerritUser_By_GerritUsername(ctx, gerrit_user_gerrit_username)
-}
-
-func (rx *Rx) UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.Context,
-	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
-	update GerritUser_Update_Fields) (
-	err error) {
-	var tx *Tx
-	if tx, err = rx.getTx(ctx); err != nil {
-		return
-	}
-	return tx.UpdateNoReturn_GerritUser_By_GerritUsername(ctx, gerrit_user_gerrit_username, update)
+	return tx.Get_GerritUser_ChatId_By_GerritUsername(ctx, gerrit_user_gerrit_username)
 }
 
 type Methods interface {
 	CreateNoReturn_GerritUser(ctx context.Context,
 		gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
-		optional GerritUser_Create_Fields) (
+		gerrit_user_chat_id GerritUser_ChatId_Field) (
 		err error)
 
-	Get_GerritUser_By_GerritUsername(ctx context.Context,
+	Get_GerritUser_ChatId_By_GerritUsername(ctx context.Context,
 		gerrit_user_gerrit_username GerritUser_GerritUsername_Field) (
-		gerrit_user *GerritUser, err error)
-
-	UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.Context,
-		gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
-		update GerritUser_Update_Fields) (
-		err error)
+		row *ChatId_Row, err error)
 }
 
 type TxMethods interface {
