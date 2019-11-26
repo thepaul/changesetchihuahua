@@ -169,6 +169,14 @@ func (s *slackInterface) SendToUserByID(ctx context.Context, id, message string)
 	return &SlackMessageHandle{Channel: ch, Timestamp: tm}, nil
 }
 
+func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (string, error) {
+	user, err := s.rtm.GetUserByEmailContext(ctx, email)
+	if err != nil {
+		return "", err
+	}
+	return user.ID, nil
+}
+
 // SlackMessageHandle provides a handle to a Slack message, which can be used to change
 // or delete that message later.
 type SlackMessageHandle struct {

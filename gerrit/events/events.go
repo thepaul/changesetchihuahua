@@ -183,7 +183,7 @@ type GerritChange struct {
 	// Subject is the description of a change.
 	Subject string
 	// Owner is the owner of a change series.
-	Owner *GerritUser
+	Owner GerritUser
 	// URL gives the canonical URL to reach this change.
 	URL string
 	// CommitMessage gives the full commit message for the current patchset.

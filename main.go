@@ -15,7 +15,7 @@ import (
 
 var (
 	gerritListenAddr = flag.String("gerrit-listen-addr", ":29746", "Address to listen on for incoming Gerrit events")
-	directoryDB = flag.String("directory-db", "sqlite:./userdirectory.db", "Data source for user directory")
+	directoryDB      = flag.String("directory-db", "sqlite:./userdirectory.db", "Data source for user directory")
 )
 
 func main() {

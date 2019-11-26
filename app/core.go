@@ -4,18 +4,21 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/jtolds/changesetchihuahua/gerrit/events"
 )
 
-var (
-	admin = flag.String("admin", "", "Identity of an admin by email address. Will be contacted through the chat system, not email")
-)
-
 const (
 	Version = "0.0.1"
+)
+
+var (
+	admin = flag.String("admin", "", "Identity of an admin by email address. Will be contacted through the chat system, not email")
+
+	notificationTimeout = flag.Duration("notify-timeout", time.Minute*30, "Maximum amount of time to spend trying to deliver a notification")
 )
 
 type MessageHandle interface{}
@@ -26,6 +29,8 @@ type ChatSystem interface {
 
 	SendToUserByEmail(ctx context.Context, email, message string) (MessageHandle, error)
 	SendToUserByID(ctx context.Context, id, message string) (MessageHandle, error)
+
+	LookupUserByEmail(ctx context.Context, username string) (string, error)
 }
 
 type App struct {
@@ -45,16 +50,23 @@ func New(logger *zap.Logger, chat ChatSystem, directory *UserDirectory) *App {
 	return app
 }
 
-func (a *App) CommentAdded(ctx context.Context, author *events.GerritUser, change *events.GerritChange) {
-	usersToTell := make([]string, 0, len(change.AllReviewers) + 1)
-	if author.Username != change.Owner.Username {
-		usersToTell = append(usersToTell, a.lookupGerritUser(ctx, change.Owner))
+func (a *App) CommentAdded(author events.GerritUser, change events.GerritChange, comment string) {
+	ctx, cancel := context.WithTimeout(context.Background(), *notificationTimeout)
+	defer cancel()
+
+	if change.Owner.Username != author.Username {
+		owner := a.lookupGerritUser(ctx, change.Owner)
+		if owner != "" {
+			_, err := a.chat.SendToUserByID(ctx, owner, fmt.Sprintf("%s commented on your changeset #%d (%s): %s", author.Name, change.Number, change.Topic, comment))
+			if err != nil {
+				a.logger.Warn("failed to send notification", zap.String("slack-id", owner), zap.String("gerrit-username", change.Owner.Username))
+			}
+		}
 	}
-	usersToTell = append(usersToTell, change.Owner)
-	userToTell := change.Owner
+	// else, determine somehow if this is a reply to another user, and notify them?
 }
 
-func (a *App) ReviewRequested(author *events.GerritUser, change *events.GerritChange) {
+func (a *App) ReviewRequested(author events.GerritUser, change events.GerritChange) {
 }
 
 func (a *App) SendToAdmin(ctx context.Context, message string) {
@@ -68,20 +80,13 @@ func (a *App) SendToAdmin(ctx context.Context, message string) {
 	}
 }
 
-var hardcoded = map[string]string{
-	"zeebo": "@jeff",
-	"jtolds": "@jt",
-	"thepaul": "@thepaul",
-}
-
 func (a *App) lookupGerritUser(ctx context.Context, user events.GerritUser) string {
-	name, found := hardcoded[user.Username]
-	if !found {
-		// try looking up username directly; maybe they are the same
-		// TODO this probably needs to come out before this can be deployed as a public app
-		name = user.Username
+	chatID, err := a.directory.LookupByGerritUsername(ctx, user.Username)
+	if err != nil {
+		a.logger.Warn("user not found in directory", zap.String("username", user.Username))
+		return ""
 	}
-	var id string
+	return chatID
 }
 
 /*

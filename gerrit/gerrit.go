@@ -58,9 +58,9 @@ func (srv *EventHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch ev := event.(type) {
 	case *events.CommentAddedEvent:
-		srv.chihuahua.CommentAdded(&ev.Author, &ev.Change)
+		go srv.chihuahua.CommentAdded(ev.Author, ev.Change, ev.Comment)
 	case *events.ReviewerAddedEvent:
-		srv.chihuahua.ReviewRequested(&ev.Reviewer, &ev.Change)
+		go srv.chihuahua.ReviewRequested(ev.Reviewer, ev.Change)
 	case *events.ReviewerDeletedEvent:
 	case *events.RefUpdatedEvent:
 	default:
