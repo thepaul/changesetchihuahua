@@ -5,11 +5,29 @@ model gerrit_user (
 
     field gerrit_username text
     field chat_id         text
+
+    // utimestamp because of sqlite :(
+    field last_report     utimestamp (updatable, nullable)
+
+    index (
+        name last_report_idx
+        fields last_report
+    )
 )
 
 read one (
-    select gerrit_user.chat_id
+    select gerrit_user
     where  gerrit_user.gerrit_username = ?
+)
+
+read all (
+    select gerrit_user
+    where  gerrit_user.last_report < ?
+)
+
+update gerrit_user (
+    where gerrit_user.gerrit_username = ?
+    noreturn
 )
 
 create gerrit_user ( noreturn )

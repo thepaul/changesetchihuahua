@@ -1,4 +1,4 @@
-package gerrit
+package eventserver
 
 import (
 	"io/ioutil"
@@ -60,9 +60,14 @@ func (srv *EventHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case *events.CommentAddedEvent:
 		go srv.chihuahua.CommentAdded(ev.Author, ev.Change, ev.Comment)
 	case *events.ReviewerAddedEvent:
-		go srv.chihuahua.ReviewRequested(ev.Reviewer, ev.Change)
+		go srv.chihuahua.ReviewerAdded(ev.Reviewer, ev.Change)
+	case *events.PatchSetCreatedEvent:
+		go srv.chihuahua.PatchSetCreated(ev.Uploader, ev.Change, ev.PatchSet)
+	case *events.ChangeAbandonedEvent:
+		go srv.chihuahua.ChangeAbandoned(ev.Abandoner, ev.Change, ev.Reason)
+	case *events.DroppedOutputEvent:
+		srv.logger.Warn("gerrit reports dropped events")
 	case *events.ReviewerDeletedEvent:
-	case *events.RefUpdatedEvent:
 	default:
 		srv.logger.Error("unknown event type", zap.String("evtype", event.GetType()))
 	}

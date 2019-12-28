@@ -2,8 +2,9 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/golang-migrate/migrate"
 	"github.com/golang-migrate/migrate/database"
@@ -22,6 +23,9 @@ import (
 type UserDirectory struct {
 	logger *zap.Logger
 	db     *dbx.DB
+
+	cacheLock sync.RWMutex
+	cache     map[string]string
 }
 
 func NewUserDirectory(logger *zap.Logger, dbSource string) (*UserDirectory, error) {
@@ -32,6 +36,7 @@ func NewUserDirectory(logger *zap.Logger, dbSource string) (*UserDirectory, erro
 	return &UserDirectory{
 		logger: logger,
 		db:     db,
+		cache:  make(map[string]string),
 	}, nil
 }
 
@@ -61,10 +66,7 @@ func initializeDirectoryDB(logger *zap.Logger, dbSource string) (*dbx.DB, error)
 		return nil, err
 	}
 
-	migrationSource, err := bindata.WithInstance(bindata.Resource(AssetNames(),
-		func(name string) ([]byte, error) {
-			return Asset(name)
-		}))
+	migrationSource, err := bindata.WithInstance(bindata.Resource(AssetNames(), Asset))
 	if err != nil {
 		return nil, err
 	}
@@ -95,9 +97,64 @@ func initializeDirectoryDB(logger *zap.Logger, dbSource string) (*dbx.DB, error)
 	return db, nil
 }
 
+func (ud *UserDirectory) LookupGerritUser(ctx context.Context, gerritUsername string) (*dbx.GerritUser, error) {
+	return ud.db.Get_GerritUser_By_GerritUsername(ctx, dbx.GerritUser_GerritUsername(gerritUsername))
+}
+
+func (ud *UserDirectory) LookupChatIDForGerritUser(ctx context.Context, gerritUsername string) (string, error) {
+	// check cache
+	ud.cacheLock.RLock()
+	chatID, found := ud.cache[gerritUsername]
+	ud.cacheLock.RUnlock()
+	if found {
+		return chatID, nil
+	}
+	// consult db if necessary
+	usermapRecord, err := ud.LookupGerritUser(ctx, gerritUsername)
+	if err != nil {
+		return "", err
+	}
+	chatID = usermapRecord.ChatId
+
+	// update cache if successful
+	ud.cacheLock.Lock()
+	ud.cache[gerritUsername] = chatID
+	ud.cacheLock.Unlock()
+
+	return chatID, nil
+}
+
+func (ud *UserDirectory) AssociateChatIDWithGerritUser(ctx context.Context, gerritUsername, chatID string) error {
+	err := ud.db.CreateNoReturn_GerritUser(ctx, dbx.GerritUser_GerritUsername(gerritUsername), dbx.GerritUser_ChatId(chatID), dbx.GerritUser_Create_Fields{})
+	if err != nil {
+		return err
+	}
+	// if update was successful, this call is responsible for adding to cache
+	ud.cacheLock.Lock()
+	ud.cache[gerritUsername] = chatID
+	ud.cacheLock.Unlock()
+
+	ud.logger.Debug("associated gerrit user to chat ID",
+		zap.String("gerrit-username", gerritUsername),
+		zap.String("chat-id", chatID))
+	return nil
+}
+
+func (ud *UserDirectory) GetAllUsersWhoseLastReportWasBefore(ctx context.Context, t time.Time) ([]*dbx.GerritUser, error) {
+	return ud.db.All_GerritUser_By_LastReport_Less(ctx, dbx.GerritUser_LastReport(t))
+}
+
+func (ud *UserDirectory) UpdateLastReportTime(ctx context.Context, gerritUsername string, when time.Time) error {
+	return ud.db.UpdateNoReturn_GerritUser_By_GerritUsername(ctx,
+		dbx.GerritUser_GerritUsername(gerritUsername),
+		dbx.GerritUser_Update_Fields{LastReport: dbx.GerritUser_LastReport(when)})
+}
+
+// newMigrateLogWrapper is used to wrap a zap.Logger in a way that is usable
+// by golang-migrate.
 func newMigrateLogWrapper(logger *zap.Logger) migrateLogWrapper {
 	verboseWanted := logger.Check(zapcore.DebugLevel, "") != nil
-	sugar := logger.WithOptions(zap.AddCallerSkip(1)).Sugar()
+	sugar := logger.Named("migrate").WithOptions(zap.AddCallerSkip(1)).Sugar()
 	return migrateLogWrapper{
 		logger:  sugar,
 		verbose: verboseWanted,
@@ -115,16 +172,4 @@ func (w migrateLogWrapper) Printf(format string, v ...interface{}) {
 
 func (w migrateLogWrapper) Verbose() bool {
 	return w.verbose
-}
-
-func (ud *UserDirectory) LookupByGerritUsername(ctx context.Context, gerritUsername string) (string, error) {
-	gerritUser, err := ud.db.Get_GerritUser_By_GerritUsername(ctx, dbx.GerritUser_GerritUsername(gerritUsername))
-	if err != nil {
-		return "", err
-	}
-	// for now we'll treat this the same as not found. to be improved later
-	if gerritUser.SlackId == nil {
-		return "", sql.ErrNoRows
-	}
-	return *gerritUser.SlackId, nil
 }

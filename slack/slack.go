@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/nlopes/slack"
 	"github.com/zeebo/errs"
@@ -26,6 +29,8 @@ type slackInterface struct {
 
 	bot  slack.UserDetails
 	team slack.Team
+
+	incomingMessageCallback func(userID, chanID, text string)
 }
 
 type logWrapper struct {
@@ -62,6 +67,10 @@ func NewSlackInterface(logger *zap.Logger) (*slackInterface, error) {
 func (s *slackInterface) SupportsMessageEditing() bool  { return true }
 func (s *slackInterface) SupportsMessageDeletion() bool { return true }
 
+func (s *slackInterface) SetIncomingMessageCallback(cb func(userID, chanID, text string)) {
+	s.incomingMessageCallback = cb
+}
+
 func (s *slackInterface) HandleEvents(ctx context.Context, chihuahua *app.App) error {
 	for {
 		select {
@@ -90,14 +99,22 @@ func (s *slackInterface) handleEvent(ctx context.Context, event slack.RTMEvent) 
 		return s.handleMessage(ctx, event.Data.(*slack.MessageEvent))
 	case "incoming_error":
 		return s.handleIncomingError(ctx, event.Data.(*slack.IncomingEventError))
-	case "user_typing":
 	case "latency_report":
 		return s.handleLatencyReport(ctx, event.Data.(*slack.LatencyReport))
 	case "disconnected":
 		return s.handleDisconnected(ctx, event.Data.(*slack.DisconnectedEvent))
+	// this type doesn't come from Slack; just from our slack lib when it has a problem
+	// understanding the JSON. we have to do this in order to get a useful error message.
+	case "unmarshalling_error":
+		return s.handleUnmarshallingError(ctx, event.Data.(*slack.UnmarshallingErrorEvent))
+
+	case "user_typing":
+	case "desktop_notification":
+
+	default:
+		s.logger.Debug("event type not recognized", zap.String("event-type", event.Type))
 	}
 
-	s.logger.Debug("event type not recognized", zap.String("event-type", event.Type))
 	return nil
 }
 
@@ -126,11 +143,17 @@ func (s *slackInterface) handleConnected(ctx context.Context, eventData *slack.C
 }
 
 func (s *slackInterface) handleMessage(ctx context.Context, eventData *slack.MessageEvent) error {
-	s.logger.Info("received message",
-		zap.Any("message", *eventData),
-		zap.Any("attachments", eventData.Attachments),
-		zap.Any("blocks", eventData.Blocks),
-		zap.Any("comment", eventData.Comment))
+	if eventData.Msg.User == s.bot.ID {
+		// ignore echoes of messages the bot itself
+		return nil
+	}
+	s.logger.Debug("received message", zap.Any("message", *eventData))
+
+	if strings.HasPrefix(eventData.Channel, "D") {
+		if s.incomingMessageCallback != nil {
+			s.incomingMessageCallback(eventData.User, eventData.Channel, eventData.Text)
+		}
+	}
 	return nil
 }
 
@@ -149,24 +172,30 @@ func (s *slackInterface) handleDisconnected(ctx context.Context, eventData *slac
 	return nil
 }
 
+func (s *slackInterface) handleUnmarshallingError(ctx context.Context, eventData *slack.UnmarshallingErrorEvent) error {
+	s.logger.Error("failed to unmarshal event from slack", zap.Error(eventData))
+	return nil
+}
+
 func (s *slackInterface) SendToUserByEmail(ctx context.Context, email, message string) (app.MessageHandle, error) {
 	user, err := s.rtm.GetUserByEmailContext(ctx, email)
 	if err != nil {
 		return nil, errs.New("failed to look up user %s: %v", email, err)
 	}
-	ch, tm, _, err := s.rtm.SendMessageContext(ctx, user.ID, slack.MsgOptionText(message, false))
-	if err != nil {
-		return nil, err
-	}
-	return &SlackMessageHandle{Channel: ch, Timestamp: tm}, nil
+	return s.SendToUserByID(ctx, user.ID, message)
 }
 
 func (s *slackInterface) SendToUserByID(ctx context.Context, id, message string) (app.MessageHandle, error) {
-	ch, tm, _, err := s.rtm.SendMessageContext(ctx, id, slack.MsgOptionText(message, false))
+	// TODO: can the IM channel be cached? is it expected to remain valid as long as the userid?
+	_, _, chanID, err := s.rtm.OpenIMChannelContext(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return &SlackMessageHandle{Channel: ch, Timestamp: tm}, nil
+	ch, tm, err := s.api.PostMessageContext(ctx, chanID, slack.MsgOptionText(message, false))
+	if err != nil {
+		return nil, err
+	}
+	return &MessageHandle{Channel: ch, Timestamp: tm}, nil
 }
 
 func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (string, error) {
@@ -177,9 +206,49 @@ func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (s
 	return user.ID, nil
 }
 
-// SlackMessageHandle provides a handle to a Slack message, which can be used to change
+func (s *slackInterface) GetInfoByID(ctx context.Context, chatID string) (app.ChatUser, error) {
+	user, err := s.rtm.GetUserInfoContext(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	// TODO: can this use rtm.GetUserPresenceContext instead? Docs suggest that that one is
+	// rate-limited, and there isn't any mention of rate limiting on this web-API version,
+	// so maybe this is the easiest way to avoid any headaches.
+	presence, err := s.api.GetUserPresenceContext(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	return &slackUser{info: user, presence: presence}, nil
+}
+
+func (s *slackInterface) FormatChangeLink(project string, number int, url, subject string) string {
+	return fmt.Sprintf("[%s#%d] <%s|%s>", project, number, url, subject)
+}
+
+func (s *slackInterface) FormatUserReference(chatID string) string {
+	return fmt.Sprintf("<@%s>", chatID)
+}
+
+// MessageHandle provides a handle to a Slack message, which can be used to change
 // or delete that message later.
-type SlackMessageHandle struct {
+type MessageHandle struct {
 	Channel   string
 	Timestamp string
+}
+
+type slackUser struct {
+	info *slack.User
+	presence *slack.UserPresence
+}
+
+func (u *slackUser) RealName() string {
+	return u.info.Profile.RealName
+}
+
+func (u *slackUser) IsOnline() bool {
+	return u.presence.Online
+}
+
+func (u *slackUser) TimeLocation() *time.Location {
+	return time.FixedZone(fmt.Sprintf("offset%d", u.info.TZOffset), u.info.TZOffset)
 }
