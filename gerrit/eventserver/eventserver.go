@@ -1,8 +1,11 @@
 package eventserver
 
 import (
+	"context"
+	"flag"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/zeebo/errs"
 	"go.uber.org/zap"
@@ -10,6 +13,8 @@ import (
 	"github.com/jtolds/changesetchihuahua/app"
 	"github.com/jtolds/changesetchihuahua/gerrit/events"
 )
+
+var notificationTimeout = flag.Duration("notify-timeout", time.Minute*30, "Maximum amount of time to spend trying to deliver a notification")
 
 type EventHandler struct {
 	logger    *zap.Logger
@@ -47,29 +52,33 @@ func (srv *EventHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	srv.logger.Debug("gerrit event received", zap.ByteString("data", body))
 
 	event, err := events.DecodeGerritEvent(body)
 	if err != nil {
-		srv.logger.Error("decoding payload", zap.Error(err))
+		srv.logger.Error("decoding payload", zap.Error(err), zap.ByteString("data", body))
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		return
 	}
 
-	switch ev := event.(type) {
-	case *events.CommentAddedEvent:
-		go srv.chihuahua.CommentAdded(ev.Author, ev.Change, ev.Comment)
-	case *events.ReviewerAddedEvent:
-		go srv.chihuahua.ReviewerAdded(ev.Reviewer, ev.Change)
-	case *events.PatchSetCreatedEvent:
-		go srv.chihuahua.PatchSetCreated(ev.Uploader, ev.Change, ev.PatchSet)
-	case *events.ChangeAbandonedEvent:
-		go srv.chihuahua.ChangeAbandoned(ev.Abandoner, ev.Change, ev.Reason)
-	case *events.DroppedOutputEvent:
-		srv.logger.Warn("gerrit reports dropped events")
-	case *events.ReviewerDeletedEvent:
-	default:
-		srv.logger.Error("unknown event type", zap.String("evtype", event.GetType()))
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), *notificationTimeout)
+		defer cancel()
+
+		switch ev := event.(type) {
+		case *events.CommentAddedEvent:
+			srv.chihuahua.CommentAdded(ctx, ev.Author, ev.Change, ev.Comment)
+		case *events.ReviewerAddedEvent:
+			srv.chihuahua.ReviewerAdded(ctx, ev.Reviewer, ev.Change)
+		case *events.PatchSetCreatedEvent:
+			srv.chihuahua.PatchSetCreated(ctx, ev.Uploader, ev.Change, ev.PatchSet)
+		case *events.ChangeAbandonedEvent:
+			srv.chihuahua.ChangeAbandoned(ctx, ev.Abandoner, ev.Change, ev.Reason)
+		case *events.DroppedOutputEvent:
+			srv.logger.Warn("gerrit reports dropped events")
+		case *events.ReviewerDeletedEvent:
+		default:
+			srv.logger.Error("unknown event type", zap.String("event-type", event.GetType()))
+		}
+	}()
 	w.WriteHeader(http.StatusOK)
 }

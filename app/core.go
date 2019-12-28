@@ -24,8 +24,6 @@ const (
 var (
 	admin = flag.String("admin", "", "Identity of an admin by email address. Will be contacted through the chat system, not email")
 
-	notificationTimeout = flag.Duration("notify-timeout", time.Minute*30, "Maximum amount of time to spend trying to deliver a notification")
-
 	reportTimeHour = flag.Int("user-report-hour", 11, "Hour (in 24-hour time) in user's local time when review report should be sent, if they are online")
 
 	minIntervalBetweenReports = flag.Duration("min-interval-between-reports", time.Hour*6, "Minimum amount of time that must elapse before more personalized Gerrit reports are sent to a given user")
@@ -84,10 +82,6 @@ func New(logger *zap.Logger, chat ChatSystem, directory *UserDirectory, gerritCl
 	return app
 }
 
-func setTimeout() (context.Context, func()) {
-	return context.WithTimeout(context.Background(), *notificationTimeout)
-}
-
 // waitGroup is like errgroup.Group but doesn't ask for or handle errors
 type waitGroup struct {
 	errgroup.Group
@@ -119,10 +113,7 @@ func (a *App) IncomingChatCommand(userID, chanID, text string) {
 	}
 }
 
-func (a *App) CommentAdded(author events.Account, change events.Change, comment string) {
-	ctx, cancel := setTimeout()
-	defer cancel()
-
+func (a *App) CommentAdded(ctx context.Context, author events.Account, change events.Change, comment string) {
 	if change.Owner.Username != author.Username {
 		a.notify(ctx, accountInfoFromEvent(&change.Owner),
 			fmt.Sprintf("%s commented on your changeset #%d (%q): %s",
@@ -131,10 +122,7 @@ func (a *App) CommentAdded(author events.Account, change events.Change, comment 
 	// else, determine somehow if this is a reply to another user, and notify them?
 }
 
-func (a *App) ReviewerAdded(reviewer events.Account, change events.Change) {
-	ctx, cancel := setTimeout()
-	defer cancel()
-
+func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change events.Change) {
 	a.notify(ctx, accountInfoFromEvent(&reviewer),
 		fmt.Sprintf("You were added as a reviewer for changeset #%d (%q)",
 			change.Number, change.Topic))
@@ -145,10 +133,7 @@ func (a *App) ReviewerAdded(reviewer events.Account, change events.Change) {
 	//		reviewer.Name, change.Number, change.Topic))
 }
 
-func (a *App) PatchSetCreated(uploader events.Account, change events.Change, patchSet events.PatchSet) {
-	ctx, cancel := setTimeout()
-	defer cancel()
-
+func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, change events.Change, patchSet events.PatchSet) {
 	var wg waitGroup
 	if uploader.Username != change.Owner.Username {
 		wg.Go(func() {
@@ -175,10 +160,7 @@ func (a *App) PatchSetCreated(uploader events.Account, change events.Change, pat
 	wg.Wait()
 }
 
-func (a *App) ChangeAbandoned(abandoner events.Account, change events.Change, reason string) {
-	ctx, cancel := setTimeout()
-	defer cancel()
-
+func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, change events.Change, reason string) {
 	var wg waitGroup
 	if abandoner.Username != change.Owner.Username {
 		wg.Go(func() {
