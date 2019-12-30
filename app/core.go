@@ -66,7 +66,7 @@ type ChatUser interface {
 type App struct {
 	logger       *zap.Logger
 	chat         ChatSystem
-	directory    *UserDirectory
+	persistentDB *PersistentDB
 	gerritClient *gerrit.Client
 
 	reporterLock sync.Mutex
@@ -75,11 +75,11 @@ type App struct {
 	adminLookupOnce sync.Once
 }
 
-func New(logger *zap.Logger, chat ChatSystem, directory *UserDirectory, gerritClient *gerrit.Client) *App {
+func New(logger *zap.Logger, chat ChatSystem, persistentDB *PersistentDB, gerritClient *gerrit.Client) *App {
 	app := &App{
 		logger:       logger,
 		chat:         chat,
-		directory:    directory,
+		persistentDB: persistentDB,
 		gerritClient: gerritClient,
 	}
 	startMsg := fmt.Sprintf("changeset-chihuahua version %s starting up", Version)
@@ -143,7 +143,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 			return
 		}
 		logger = logger.With(zap.String("gerrit-username", gerritUsername), zap.String("chat-id", chatID))
-		if err := a.directory.AssociateChatIDWithGerritUser(ctx, gerritUsername, chatID); err != nil {
+		if err := a.persistentDB.AssociateChatIDWithGerritUser(ctx, gerritUsername, chatID); err != nil {
 			logger.Error("failed to create manual association", zap.Error(err))
 			reply("failed to create association")
 		} else {
@@ -178,7 +178,7 @@ func (a *App) getNewInlineComments(ctx context.Context, changeID, patchSetID, us
 			}
 		}
 	}
-	if err := a.directory.IdentifyNewInlineComments(ctx, newInline); err != nil {
+	if err := a.persistentDB.IdentifyNewInlineComments(ctx, newInline); err != nil {
 		return nil, nil, err
 	}
 	return allInline, newInline, nil
@@ -386,32 +386,32 @@ func (a *App) SendToAdmin(ctx context.Context, message string) {
 }
 
 func (a *App) lookupGerritUser(ctx context.Context, user *gerrit.AccountInfo) string {
-	chatID, err := a.directory.LookupChatIDForGerritUser(ctx, user.Username)
+	chatID, err := a.persistentDB.LookupChatIDForGerritUser(ctx, user.Username)
 	if err == nil {
 		return chatID
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		a.logger.Error("failed to query directory db", zap.Error(err))
+		a.logger.Error("failed to query persistent db", zap.Error(err))
 		return ""
 	}
 	if user.Email == "" {
-		a.logger.Info("user not found in directory",
+		a.logger.Info("user not found in persistent db",
 			zap.String("gerrit-username", user.Username))
 		return ""
 	}
 	// fall back to checking for the same email address in the chat system
 	chatID, err = a.chat.LookupUserByEmail(ctx, user.Email)
 	if err != nil {
-		a.logger.Warn("user not found in directory",
+		a.logger.Warn("user not found in chat system",
 			zap.String("gerrit-username", user.Username),
 			zap.String("gerrit-email", user.Email),
 			zap.Error(err))
 		return ""
 	}
 	// success- save this association
-	err = a.directory.AssociateChatIDWithGerritUser(ctx, user.Username, chatID)
+	err = a.persistentDB.AssociateChatIDWithGerritUser(ctx, user.Username, chatID)
 	if err != nil {
-		a.logger.Error("found new user association, but could not update directory db",
+		a.logger.Error("found new user association, but could not update persistent db",
 			zap.String("gerrit-username", user.Username),
 			zap.String("chat-id", chatID),
 			zap.Error(err))
@@ -483,7 +483,7 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 		zap.String("gerrit-name", acct.Name))
 
 	// see if we even know who this is in chat
-	chatUser, err := a.directory.LookupGerritUser(ctx, acct.Username)
+	chatUser, err := a.persistentDB.LookupGerritUser(ctx, acct.Username)
 	if err != nil {
 		// we don't know who this is. can't send a report.
 		logger.Info("No association with user in chat. Skipping.")
@@ -531,8 +531,8 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 
 	// If we made it this far, record the report in the db. it might still fail,
 	// but it's not absolutely critical that all reports reach the user.
-	if err := a.directory.UpdateLastReportTime(ctx, acct.Username, now); err != nil {
-		logger.Error("could not update last-report time in directory", zap.Error(err))
+	if err := a.persistentDB.UpdateLastReportTime(ctx, acct.Username, now); err != nil {
+		logger.Error("could not update last-report time in persistent db", zap.Error(err))
 		return
 	}
 

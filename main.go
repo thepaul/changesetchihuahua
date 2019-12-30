@@ -18,7 +18,7 @@ import (
 var (
 	gerritListenAddr = flag.String("gerrit-listen", ":29746", "Address to listen on for incoming Gerrit events")
 	gerritServerAddr = flag.String("gerrit-server", "https://gerrit-review.googlesource.com/", "Address of the Gerrit server to query about changes")
-	directoryDB      = flag.String("directory-db", "sqlite:./userdirectory.db", "Data source for user directory")
+	persistentDBSource      = flag.String("persistent-db", "sqlite:./persistent.db", "Data source for persistent DB")
 )
 
 func main() {
@@ -35,15 +35,15 @@ func main() {
 	if err != nil {
 		logger.Fatal("initializing Slack connection", zap.Error(err))
 	}
-	directory, err := app.NewUserDirectory(logger.Named("directory"), *directoryDB)
+	persistentDB, err := app.NewPersistentDB(logger.Named("db"), *persistentDBSource)
 	if err != nil {
-		logger.Fatal("initializing user directory DB", zap.Error(err))
+		logger.Fatal("initializing persistent DB", zap.Error(err))
 	}
 	gerritClient, err := gerrit.OpenClient(ctx, *gerritServerAddr)
 	if err != nil {
 		logger.Fatal("initializing gerrit client", zap.Error(err))
 	}
-	chihuahua := app.New(logger, chatInterface, directory, gerritClient)
+	chihuahua := app.New(logger, chatInterface, persistentDB, gerritClient)
 
 	group, ctx := errgroup.WithContext(ctx)
 

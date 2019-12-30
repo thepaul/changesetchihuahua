@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func doDirectoryTest(t *testing.T, f func(ctx context.Context, d *UserDirectory)) {
+func doPersistentDBTest(t *testing.T, f func(ctx context.Context, d *PersistentDB)) {
 	tmpDir, err := ioutil.TempDir("", "changeset-chihuahua-test")
 	require.NoError(t, err)
 	defer func() {
@@ -21,19 +21,19 @@ func doDirectoryTest(t *testing.T, f func(ctx context.Context, d *UserDirectory)
 		}
 	}()
 
-	dbFile := path.Join(tmpDir, "directory.db")
-	db, err := NewUserDirectory(zaptest.NewLogger(t), "sqlite:"+dbFile)
+	dbFile := path.Join(tmpDir, "persistent.db")
+	db, err := NewPersistentDB(zaptest.NewLogger(t), "sqlite:"+dbFile)
 	require.NoError(t, err)
 	require.NotNil(t, db)
 
 	f(context.Background(), db)
 }
 
-func TestDirectoryBasics(t *testing.T) {
+func TestPersistentDBBasics(t *testing.T) {
 	const gerritUsername = "noodle"
 	const chatID = "U1E9A928BCD"
 
-	doDirectoryTest(t, func(ctx context.Context, db *UserDirectory) {
+	doPersistentDBTest(t, func(ctx context.Context, db *PersistentDB) {
 		// looking up a nonexistent name should fail
 		got, err := db.LookupChatIDForGerritUser(ctx, gerritUsername)
 		require.Equal(t, sql.ErrNoRows, err)

@@ -20,7 +20,7 @@ import (
 
 //go:generate go-bindata -pkg app -prefix migrations -modtime 1574794364 -mode 420 -o migrations.go -ignore=/\. migrations/
 
-type UserDirectory struct {
+type PersistentDB struct {
 	logger *zap.Logger
 	db     *dbx.DB
 	dbLock sync.Mutex // is this still necessary with sqlite?
@@ -29,19 +29,19 @@ type UserDirectory struct {
 	cache     map[string]string
 }
 
-func NewUserDirectory(logger *zap.Logger, dbSource string) (*UserDirectory, error) {
-	db, err := initializeDirectoryDB(logger, dbSource)
+func NewPersistentDB(logger *zap.Logger, dbSource string) (*PersistentDB, error) {
+	db, err := initializePersistentDB(logger, dbSource)
 	if err != nil {
 		return nil, err
 	}
-	return &UserDirectory{
+	return &PersistentDB{
 		logger: logger,
 		db:     db,
 		cache:  make(map[string]string),
 	}, nil
 }
 
-func openDirectoryDB(dbSource string) (*dbx.DB, string, error) {
+func openPersistentDB(dbSource string) (*dbx.DB, string, error) {
 	sourceSplit := strings.SplitN(dbSource, ":", 2)
 	if len(sourceSplit) == 1 {
 		return nil, "", errs.New("Invalid data source: %q. Example: sqlite:foo.db", dbSource)
@@ -61,8 +61,8 @@ func openDirectoryDB(dbSource string) (*dbx.DB, string, error) {
 	return dbxDB, driverName, err
 }
 
-func initializeDirectoryDB(logger *zap.Logger, dbSource string) (*dbx.DB, error) {
-	db, driverName, err := openDirectoryDB(dbSource)
+func initializePersistentDB(logger *zap.Logger, dbSource string) (*dbx.DB, error) {
+	db, driverName, err := openPersistentDB(dbSource)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func initializeDirectoryDB(logger *zap.Logger, dbSource string) (*dbx.DB, error)
 		return nil, err
 	}
 
-	migrator, err := migrate.NewWithInstance("go-bindata", migrationSource, "directory-db", migrationTarget)
+	migrator, err := migrate.NewWithInstance("go-bindata", migrationSource, "persistent-db", migrationTarget)
 	if err != nil {
 		return nil, err
 	}
@@ -98,14 +98,14 @@ func initializeDirectoryDB(logger *zap.Logger, dbSource string) (*dbx.DB, error)
 	return db, nil
 }
 
-func (ud *UserDirectory) LookupGerritUser(ctx context.Context, gerritUsername string) (*dbx.GerritUser, error) {
+func (ud *PersistentDB) LookupGerritUser(ctx context.Context, gerritUsername string) (*dbx.GerritUser, error) {
 	ud.dbLock.Lock()
 	defer ud.dbLock.Unlock()
 
 	return ud.db.Get_GerritUser_By_GerritUsername(ctx, dbx.GerritUser_GerritUsername(gerritUsername))
 }
 
-func (ud *UserDirectory) LookupChatIDForGerritUser(ctx context.Context, gerritUsername string) (string, error) {
+func (ud *PersistentDB) LookupChatIDForGerritUser(ctx context.Context, gerritUsername string) (string, error) {
 	// check cache
 	ud.cacheLock.RLock()
 	chatID, found := ud.cache[gerritUsername]
@@ -128,7 +128,7 @@ func (ud *UserDirectory) LookupChatIDForGerritUser(ctx context.Context, gerritUs
 	return chatID, nil
 }
 
-func (ud *UserDirectory) AssociateChatIDWithGerritUser(ctx context.Context, gerritUsername, chatID string) error {
+func (ud *PersistentDB) AssociateChatIDWithGerritUser(ctx context.Context, gerritUsername, chatID string) error {
 	err := func() error {
 		ud.dbLock.Lock()
 		defer ud.dbLock.Unlock()
@@ -149,14 +149,14 @@ func (ud *UserDirectory) AssociateChatIDWithGerritUser(ctx context.Context, gerr
 	return nil
 }
 
-func (ud *UserDirectory) GetAllUsersWhoseLastReportWasBefore(ctx context.Context, t time.Time) ([]*dbx.GerritUser, error) {
+func (ud *PersistentDB) GetAllUsersWhoseLastReportWasBefore(ctx context.Context, t time.Time) ([]*dbx.GerritUser, error) {
 	ud.dbLock.Lock()
 	defer ud.dbLock.Unlock()
 
 	return ud.db.All_GerritUser_By_LastReport_Less(ctx, dbx.GerritUser_LastReport(t))
 }
 
-func (ud *UserDirectory) UpdateLastReportTime(ctx context.Context, gerritUsername string, when time.Time) error {
+func (ud *PersistentDB) UpdateLastReportTime(ctx context.Context, gerritUsername string, when time.Time) error {
 	ud.dbLock.Lock()
 	defer ud.dbLock.Unlock()
 
@@ -165,7 +165,7 @@ func (ud *UserDirectory) UpdateLastReportTime(ctx context.Context, gerritUsernam
 		dbx.GerritUser_Update_Fields{LastReport: dbx.GerritUser_LastReport(when)})
 }
 
-func (ud *UserDirectory) IdentifyNewInlineComments(ctx context.Context, commentsByID map[string]time.Time) (err error) {
+func (ud *PersistentDB) IdentifyNewInlineComments(ctx context.Context, commentsByID map[string]time.Time) (err error) {
 	if len(commentsByID) == 0 {
 		return nil
 	}
