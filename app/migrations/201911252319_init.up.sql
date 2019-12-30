@@ -6,3 +6,11 @@ CREATE TABLE gerrit_users (
 );
 
 CREATE INDEX last_report_idx ON gerrit_users ( last_report );
+
+CREATE TABLE inline_comments (
+	comment_id text NOT NULL,
+	updated_at timestamp NOT NULL,
+	PRIMARY KEY ( comment_id )
+);
+
+CREATE INDEX updated_at_idx ON inline_comments ( updated_at );

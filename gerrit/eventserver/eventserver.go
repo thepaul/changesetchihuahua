@@ -59,6 +59,7 @@ func (srv *EventHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		return
 	}
+	srv.logger.Debug("received gerrit event", zap.String("origin", r.RemoteAddr), zap.String("event-type", event.GetType()))
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), *notificationTimeout)
@@ -66,7 +67,7 @@ func (srv *EventHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		switch ev := event.(type) {
 		case *events.CommentAddedEvent:
-			srv.chihuahua.CommentAdded(ctx, ev.Author, ev.Change, ev.Comment)
+			srv.chihuahua.CommentAdded(ctx, ev.Author, ev.Change, ev.PatchSet, ev.Comment, ev.EventCreatedAt())
 		case *events.ReviewerAddedEvent:
 			srv.chihuahua.ReviewerAdded(ctx, ev.Reviewer, ev.Change)
 		case *events.PatchSetCreatedEvent:

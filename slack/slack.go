@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nlopes/slack"
-	"github.com/zeebo/errs"
+	"github.com/nlopes/slack/slackutilsx"
 	"go.uber.org/zap"
 
 	"github.com/jtolds/changesetchihuahua/app"
@@ -30,7 +30,7 @@ type slackInterface struct {
 	bot  slack.UserDetails
 	team slack.Team
 
-	incomingMessageCallback func(userID, chanID, text string)
+	incomingMessageCallback func(userID, chanID string, isDM bool, text string)
 }
 
 type logWrapper struct {
@@ -64,10 +64,7 @@ func NewSlackInterface(logger *zap.Logger) (*slackInterface, error) {
 	}, nil
 }
 
-func (s *slackInterface) SupportsMessageEditing() bool  { return true }
-func (s *slackInterface) SupportsMessageDeletion() bool { return true }
-
-func (s *slackInterface) SetIncomingMessageCallback(cb func(userID, chanID, text string)) {
+func (s *slackInterface) SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string)) {
 	s.incomingMessageCallback = cb
 }
 
@@ -86,7 +83,7 @@ func (s *slackInterface) HandleEvents(ctx context.Context, chihuahua *app.App) e
 }
 
 func (s *slackInterface) handleEvent(ctx context.Context, event slack.RTMEvent) (err error) {
-	s.logger.Debug("received event", zap.String("event-type", event.Type))
+	s.logger.Debug("received slack event", zap.String("event-type", event.Type))
 
 	switch event.Type {
 	case "hello":
@@ -143,16 +140,14 @@ func (s *slackInterface) handleConnected(ctx context.Context, eventData *slack.C
 }
 
 func (s *slackInterface) handleMessage(ctx context.Context, eventData *slack.MessageEvent) error {
-	if eventData.Msg.User == s.bot.ID {
-		// ignore echoes of messages the bot itself
+	if eventData.Msg.SubType == "bot_message" {
+		// ignore messages from bots, including echoes of messages from this bot itself
 		return nil
 	}
 	s.logger.Debug("received message", zap.Any("message", *eventData))
 
-	if strings.HasPrefix(eventData.Channel, "D") {
-		if s.incomingMessageCallback != nil {
-			s.incomingMessageCallback(eventData.User, eventData.Channel, eventData.Text)
-		}
+	if s.incomingMessageCallback != nil {
+		s.incomingMessageCallback(eventData.User, eventData.Channel, strings.HasPrefix(eventData.Channel, "D"), eventData.Text)
 	}
 	return nil
 }
@@ -175,14 +170,6 @@ func (s *slackInterface) handleDisconnected(ctx context.Context, eventData *slac
 func (s *slackInterface) handleUnmarshallingError(ctx context.Context, eventData *slack.UnmarshallingErrorEvent) error {
 	s.logger.Error("failed to unmarshal event from slack", zap.Error(eventData))
 	return nil
-}
-
-func (s *slackInterface) SendToUserByEmail(ctx context.Context, email, message string) (app.MessageHandle, error) {
-	user, err := s.rtm.GetUserByEmailContext(ctx, email)
-	if err != nil {
-		return nil, errs.New("failed to look up user %s: %v", email, err)
-	}
-	return s.SendToUserByID(ctx, user.ID, message)
 }
 
 func (s *slackInterface) SendToUserByID(ctx context.Context, id, message string) (app.MessageHandle, error) {
@@ -222,11 +209,26 @@ func (s *slackInterface) GetInfoByID(ctx context.Context, chatID string) (app.Ch
 }
 
 func (s *slackInterface) FormatChangeLink(project string, number int, url, subject string) string {
-	return fmt.Sprintf("[%s#%d] <%s|%s>", project, number, url, subject)
+	return fmt.Sprintf("[%s#%d] %s", escapeText(project), number, s.FormatLink(url, subject))
 }
 
-func (s *slackInterface) FormatUserReference(chatID string) string {
+func (s *slackInterface) FormatUserLink(chatID string) string {
 	return fmt.Sprintf("<@%s>", chatID)
+}
+
+func (s *slackInterface) FormatLink(url, text string) string {
+	return fmt.Sprintf("<%s|%s>", url, escapeText(text))
+}
+
+func (s *slackInterface) UnwrapUserLink(userLink string) string {
+	if len(userLink) > 3 && userLink[0] == '<' && userLink[1] == '@' && userLink[len(userLink)-1] == '>'	{
+		return userLink[2:len(userLink)-1]
+	}
+	return ""
+}
+
+func escapeText(t string) string {
+	return slackutilsx.EscapeMessage(t)
 }
 
 // MessageHandle provides a handle to a Slack message, which can be used to change

@@ -31,3 +31,23 @@ update gerrit_user (
 )
 
 create gerrit_user ( noreturn )
+
+model inline_comment (
+    key comment_id
+
+    field comment_id text
+    field updated_at utimestamp (updatable)
+
+    index (
+        name updated_at_idx
+        fields updated_at
+    )
+)
+
+update inline_comment (
+    where inline_comment.comment_id = ?
+)
+
+delete inline_comment (
+    where inline_comment.updated_at < ?
+)

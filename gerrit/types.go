@@ -493,6 +493,65 @@ type GpgKeyInfo struct {
 	Problems []string
 }
 
+// CommentInfo contains information about an inline comment.
+type CommentInfo struct {
+	// PatchSet is the patch set number for the comment; only set in contexts where comments
+	// may be returned for multiple patch sets.
+	PatchSet int
+	// ID is the URL encoded UUID of the comment.
+	ID string
+	// Path is the path of the file for which the inline comment was done. Not set if returned
+	// in a map where the key is the file path.
+	Path string
+	// Side is the side on which the comment was added. Allowed values are REVISION and PARENT.
+	// If not set, the default is REVISION.
+	Side string
+	// Parent is the 1-based parent number. Used only for merge commits when side == PARENT.
+	// When not set the comment is for the auto-merge tree.
+	Parent int
+	// Line is the number of the line for which the comment was done. If range is set, this
+	// equals the end line of the range. If neither line nor range is set, it’s a file comment.
+	Line int
+	// Range is the range of the comment as a CommentRange entity.
+	Range *CommentRange
+	// InReplyTo is the URL encoded UUID of the comment to which this comment is a reply.
+	InReplyTo string
+	// Message is the comment message.
+	Message string
+	// Updated is the timestamp of when this comment was written.
+	Updated string
+	// Author is the author of the message as an AccountInfo entity. Unset for draft comments,
+	// assumed to be the calling user.
+	Author AccountInfo
+	// Tag is the value of the tag field from ReviewInput set while posting the review. NOTE:
+	// To apply different tags on different votes/comments multiple invocations of the REST
+	// call are required.
+	Tag string
+	// Unresolved is whether or not the comment must be addressed by the user. The state of
+	// resolution of a comment thread is stored in the last comment in that thread
+	// chronologically.
+	Unresolved bool
+}
+
+// CommentRange describes the range of an inline comment.
+//
+// The comment range is a range from the start position, specified by start_line and
+// start_character, to the end position, specified by end_line and end_character. The start
+// position is inclusive and the end position is exclusive.
+//
+// So, a range over part of a line will have start_line equal to end_line; however a range with
+// end_line set to 5 and end_character equal to 0 will not include any characters on line 5.
+type CommentRange struct {
+	// StartLine is the start line number of the range. (1-based)
+	StartLine int
+	// StartLine is the character position in the start line. (0-based)
+	StartCharacter int
+	// EndLine is the end line number of the range. (1-based)
+	EndLine int
+	// EndCharacter is the character position in the end line. (0-based)
+	EndCharacter int
+}
+
 // ParseTimestamp converts a timestamp from the Gerrit API to a time.Time in UTC.
 func ParseTimestamp(timeStamp string) time.Time {
 	t, err := time.ParseInLocation("2006-01-02 15:04:05.000000000", timeStamp, time.UTC)

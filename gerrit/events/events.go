@@ -21,7 +21,7 @@ type GerritEvent interface {
 // GerritEvent compatibility.
 type Base struct {
 	Type           string
-	EventCreatedOn float64 `json:"eventCreatedOn"`
+	EventCreatedOn int64 `json:"eventCreatedOn"`
 }
 
 func (g *Base) GetType() string {
@@ -29,7 +29,7 @@ func (g *Base) GetType() string {
 }
 
 func (g *Base) EventCreatedAt() time.Time {
-	return UnixFloatTime(g.EventCreatedOn)
+	return UnixInt64Time(g.EventCreatedOn)
 }
 
 func DecodeGerritEvent(eventJSON []byte) (GerritEvent, error) {

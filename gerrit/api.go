@@ -130,32 +130,137 @@ func (c *Client) QueryChanges(ctx context.Context, query string) ([]ChangeInfo, 
 	return changes, err
 }
 
+func (c *Client) GetChangeEx(ctx context.Context, changeID string, opts *QueryChangesOpts) (changeInfo ChangeInfo, err error) {
+	values := url.Values{}
+	if labels := opts.assembleLabels(); len(labels) > 0 {
+		values["o"] = labels
+	}
+	resp, err := c.doGet(ctx, "/changes/"+changeID, values)
+	if err != nil {
+		return changeInfo, err
+	}
+	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
+
+	decoder := json.NewDecoder(resp.Body)
+	err = decoder.Decode(&changeInfo)
+	return changeInfo, err
+}
+
+func (c *Client) ListChangeMessages(ctx context.Context, changeID string) ([]ChangeMessageInfo, error) {
+	resp, err := c.doGet(ctx, "/changes/"+changeID+"/messages", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
+
+	var changeMessages []ChangeMessageInfo
+	decoder := json.NewDecoder(resp.Body)
+	err = decoder.Decode(&changeMessages)
+	return changeMessages, err
+}
+
+func (c *Client) ListRevisionComments(ctx context.Context, changeID, revisionID string) (map[string][]CommentInfo, error) {
+	resp, err := c.doGet(ctx, "/changes/"+changeID+"/revisions/"+revisionID+"/comments/", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
+
+	var commentMap map[string][]CommentInfo
+	decoder := json.NewDecoder(resp.Body)
+	err = decoder.Decode(&commentMap)
+	return commentMap, err
+}
+
+// QueryChangesOpts controls behavior of queries to change-related API endpoints.
 type QueryChangesOpts struct {
-	Limit                    int
-	StartAt                  int
-	DescribeLabels           bool
-	DescribeDetailedLabels   bool
-	DescribeCurrentRevision  bool
-	DescribeAllRevisions     bool
+	// Limit specifies a limit on the number of results returned from a QueryChangesEx call.
+	Limit int
+	// StartAt specifies a number of changes to skip when querying multiple. This and Limit can
+	// be combined to implement paging.
+	StartAt int
+	// DescribeLabels requests inclusion of a summary of each label required for submit, and
+	// approvers that have granted (or rejected) that label.
+	DescribeLabels bool
+	// DescribeDetailedLabels requests inclusion of detailed label information, including
+	// numeric values of all existing approvals, recognized label values, values permitted to
+	// be set by the current user, all reviewers by state, and reviewers that may be removed by
+	// the current user.
+	DescribeDetailedLabels bool
+	// DescribeCurrentRevision requests inclusion of details about the current revision (patch
+	// set) of the change, including the commit SHA-1 and URLs to fetch from.
+	DescribeCurrentRevision bool
+	// DescribeAllRevisions requests inclusion of details about all revisions, not just
+	// current.
+	DescribeAllRevisions bool
+	// DescribeDownloadCommands requests inclusion of the commands field in the FetchInfo for
+	// revisions. Only valid when the DescribeCurrentRevision or DescribeAllRevisions options
+	// are selected.
 	DescribeDownloadCommands bool
-	DescribeCurrentCommit    bool
-	DescribeAllCommits       bool
-	DescribeCurrentFiles     bool
-	DescribeAllFiles         bool
+	// DescribeCurrentCommit requests inclusion of all header fields from the commit object,
+	// including message. Only valid when the DescribeCurrentRevision or DescribeAllRevisions
+	// options are selected.
+	DescribeCurrentCommit bool
+	// DescribeAllCommits requests inclusion of all header fields from the output revisions.
+	// If only DescribeCurrentRevision was requested then only the current revision’s commit
+	// data will be output.
+	DescribeAllCommits bool
+	// DescribeCurrentFiles requests inclusion of list files modified by the commit and magic
+	// files, including basic line counts inserted/deleted per file. Only valid when the
+	// DescribeCurrentRevision or DescribeAllRevisions options are selected.
+	DescribeCurrentFiles bool
+	// DescribeAllFiles requests inclusion of all files modified by the commit and magic files,
+	// including basic line counts inserted/deleted per file. If only DescribeCurrentRevision
+	// was requested then only that commit’s modified files will be output.
+	DescribeAllFiles bool
+	// DescribeDetailedAccounts requests inclusion of the AccountID, Email and Username fields
+	// in AccountInfo entities.
 	DescribeDetailedAccounts bool
-	DescribeReviewerUpdates  bool
-	DescribeMessages         bool
-	DescribeCurrentActions   bool
-	DescribeChangeActions    bool
-	DescribeReviewed         bool
-	DescribeSkipMergeable    bool
-	DescribeSubmittable      bool
-	DescribeWebLinks         bool
-	DescribeCheck            bool
-	DescribeCommitFooters    bool
+	// DescribeReviewerUpdates requests inclusion of updates to reviewers set as
+	// ReviewerUpdateInfo entities.
+	DescribeReviewerUpdates bool
+	// DescribeMessages requests inclusion of messages associated with the change.
+	DescribeMessages bool
+	// DescribeCurrentActions requests inclusion of include information on available actions
+	// for the change and its current revision. Ignored if the caller is not authenticated.
+	DescribeCurrentActions bool
+	// DescribeChangeActions requests inclusion of information on available change actions for
+	// the change. Ignored if the caller is not authenticated.
+	DescribeChangeActions bool
+	// DescribeReviewed requests inclusion of the reviewed field if all of the following are
+	// true: (1) the change is open, (2) the caller is authenticated, and (3) the caller has
+	// commented on the change more recently than the last update from the change owner, i.e.
+	// this change would show up in the results of reviewedby:self.
+	DescribeReviewed bool
+	// DescribeSkipMergeable requests skipping of the Mergeable field in ChangeInfo. For fast-
+	// moving projects, this field must be recomputed often, which is slow for projects with
+	// big trees.
+	//
+	// When change.api.excludeMergeableInChangeInfo is set in the gerrit.config, the mergeable
+	// field will always be omitted and DescribeSkipMergeable has no effect.
+	//
+	// A change’s mergeability can be requested separately by calling the get-mergeable
+	// endpoint.
+	DescribeSkipMergeable bool
+	// DescribeSubmittable requests inclusion of the Submittable field in ChangeInfo entities,
+	// which can be used to tell if the change is reviewed and ready for submit.
+	DescribeSubmittable bool
+	// DescribeWebLinks requests inclusion of the WebLinks field in CommitInfo entities,
+	// therefore only valid in combination with DescribeCurrentCommit or DescribeAllCommits.
+	DescribeWebLinks bool
+	// DescribeCheck requests inclusion of potential problems with the change.
+	DescribeCheck bool
+	// DescribeCommitFooters requests inclusion of the full commit message with Gerrit-specific
+	// commit footers in the RevisionInfo.
+	DescribeCommitFooters bool
+	// DescribePushCertificates requests inclusion of push certificate information in the
+	// RevisionInfo. Ignored if signed push is not enabled on the server.
 	DescribePushCertificates bool
-	DescribeTrackingIDs      bool
-	DescribeNoLimit          bool
+	// DescribeTrackingIDs requests inclusion of references to external tracking systems as
+	// TrackingIDInfo entities.
+	DescribeTrackingIDs bool
+	// DescribeNoLimit requests all results to be returned.
+	DescribeNoLimit bool
 }
 
 func (o *QueryChangesOpts) assembleLabels() (labels []string) {

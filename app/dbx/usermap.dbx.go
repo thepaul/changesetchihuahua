@@ -278,7 +278,13 @@ func (obj *postgresDB) Schema() string {
 	last_report timestamp,
 	PRIMARY KEY ( gerrit_username )
 );
-CREATE INDEX last_report_idx ON gerrit_users ( last_report );`
+CREATE TABLE inline_comments (
+	comment_id text NOT NULL,
+	updated_at timestamp NOT NULL,
+	PRIMARY KEY ( comment_id )
+);
+CREATE INDEX last_report_idx ON gerrit_users ( last_report );
+CREATE INDEX updated_at_idx ON inline_comments ( updated_at );`
 }
 
 func (obj *postgresDB) wrapTx(tx *sql.Tx) txMethods {
@@ -348,7 +354,13 @@ func (obj *sqlite3DB) Schema() string {
 	last_report TIMESTAMP,
 	PRIMARY KEY ( gerrit_username )
 );
-CREATE INDEX last_report_idx ON gerrit_users ( last_report );`
+CREATE TABLE inline_comments (
+	comment_id TEXT NOT NULL,
+	updated_at TIMESTAMP NOT NULL,
+	PRIMARY KEY ( comment_id )
+);
+CREATE INDEX last_report_idx ON gerrit_users ( last_report );
+CREATE INDEX updated_at_idx ON inline_comments ( updated_at );`
 }
 
 func (obj *sqlite3DB) wrapTx(tx *sql.Tx) txMethods {
@@ -497,6 +509,56 @@ func (f GerritUser_LastReport_Field) value() interface{} {
 }
 
 func (GerritUser_LastReport_Field) _Column() string { return "last_report" }
+
+type InlineComment struct {
+	CommentId string
+	UpdatedAt time.Time
+}
+
+func (InlineComment) _Table() string { return "inline_comments" }
+
+type InlineComment_Update_Fields struct {
+	UpdatedAt InlineComment_UpdatedAt_Field
+}
+
+type InlineComment_CommentId_Field struct {
+	_set   bool
+	_null  bool
+	_value string
+}
+
+func InlineComment_CommentId(v string) InlineComment_CommentId_Field {
+	return InlineComment_CommentId_Field{_set: true, _value: v}
+}
+
+func (f InlineComment_CommentId_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (InlineComment_CommentId_Field) _Column() string { return "comment_id" }
+
+type InlineComment_UpdatedAt_Field struct {
+	_set   bool
+	_null  bool
+	_value time.Time
+}
+
+func InlineComment_UpdatedAt(v time.Time) InlineComment_UpdatedAt_Field {
+	v = toUTC(v)
+	return InlineComment_UpdatedAt_Field{_set: true, _value: v}
+}
+
+func (f InlineComment_UpdatedAt_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (InlineComment_UpdatedAt_Field) _Column() string { return "updated_at" }
 
 func toUTC(t time.Time) time.Time {
 	return t.UTC()
@@ -824,6 +886,72 @@ func (obj *postgresImpl) UpdateNoReturn_GerritUser_By_GerritUsername(ctx context
 	return nil
 }
 
+func (obj *postgresImpl) Update_InlineComment_By_CommentId(ctx context.Context,
+	inline_comment_comment_id InlineComment_CommentId_Field,
+	update InlineComment_Update_Fields) (
+	inline_comment *InlineComment, err error) {
+	var __sets = &__sqlbundle_Hole{}
+
+	var __embed_stmt = __sqlbundle_Literals{Join: "", SQLs: []__sqlbundle_SQL{__sqlbundle_Literal("UPDATE inline_comments SET "), __sets, __sqlbundle_Literal(" WHERE inline_comments.comment_id = ? RETURNING inline_comments.comment_id, inline_comments.updated_at")}}
+
+	__sets_sql := __sqlbundle_Literals{Join: ", "}
+	var __values []interface{}
+	var __args []interface{}
+
+	if update.UpdatedAt._set {
+		__values = append(__values, update.UpdatedAt.value())
+		__sets_sql.SQLs = append(__sets_sql.SQLs, __sqlbundle_Literal("updated_at = ?"))
+	}
+
+	if len(__sets_sql.SQLs) == 0 {
+		return nil, emptyUpdate()
+	}
+
+	__args = append(__args, inline_comment_comment_id.value())
+
+	__values = append(__values, __args...)
+	__sets.SQL = __sets_sql
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	inline_comment = &InlineComment{}
+	err = obj.driver.QueryRow(__stmt, __values...).Scan(&inline_comment.CommentId, &inline_comment.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return inline_comment, nil
+}
+
+func (obj *postgresImpl) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
+	inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
+	count int64, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("DELETE FROM inline_comments WHERE inline_comments.updated_at < ?")
+
+	var __values []interface{}
+	__values = append(__values, inline_comment_updated_at_less.value())
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	__res, err := obj.driver.Exec(__stmt, __values...)
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	return count, nil
+
+}
+
 func (impl postgresImpl) isConstraintError(err error) (
 	constraint string, ok bool) {
 	if e, ok := err.(*pq.Error); ok {
@@ -837,6 +965,16 @@ func (impl postgresImpl) isConstraintError(err error) (
 func (obj *postgresImpl) deleteAll(ctx context.Context) (count int64, err error) {
 	var __res sql.Result
 	var __count int64
+	__res, err = obj.driver.Exec("DELETE FROM inline_comments;")
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	__count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+	count += __count
 	__res, err = obj.driver.Exec("DELETE FROM gerrit_users;")
 	if err != nil {
 		return 0, obj.makeErr(err)
@@ -964,6 +1102,82 @@ func (obj *sqlite3Impl) UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.
 	return nil
 }
 
+func (obj *sqlite3Impl) Update_InlineComment_By_CommentId(ctx context.Context,
+	inline_comment_comment_id InlineComment_CommentId_Field,
+	update InlineComment_Update_Fields) (
+	inline_comment *InlineComment, err error) {
+	var __sets = &__sqlbundle_Hole{}
+
+	var __embed_stmt = __sqlbundle_Literals{Join: "", SQLs: []__sqlbundle_SQL{__sqlbundle_Literal("UPDATE inline_comments SET "), __sets, __sqlbundle_Literal(" WHERE inline_comments.comment_id = ?")}}
+
+	__sets_sql := __sqlbundle_Literals{Join: ", "}
+	var __values []interface{}
+	var __args []interface{}
+
+	if update.UpdatedAt._set {
+		__values = append(__values, update.UpdatedAt.value())
+		__sets_sql.SQLs = append(__sets_sql.SQLs, __sqlbundle_Literal("updated_at = ?"))
+	}
+
+	if len(__sets_sql.SQLs) == 0 {
+		return nil, emptyUpdate()
+	}
+
+	__args = append(__args, inline_comment_comment_id.value())
+
+	__values = append(__values, __args...)
+	__sets.SQL = __sets_sql
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	inline_comment = &InlineComment{}
+	_, err = obj.driver.Exec(__stmt, __values...)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+
+	var __embed_stmt_get = __sqlbundle_Literal("SELECT inline_comments.comment_id, inline_comments.updated_at FROM inline_comments WHERE inline_comments.comment_id = ?")
+
+	var __stmt_get = __sqlbundle_Render(obj.dialect, __embed_stmt_get)
+	obj.logStmt("(IMPLIED) "+__stmt_get, __args...)
+
+	err = obj.driver.QueryRow(__stmt_get, __args...).Scan(&inline_comment.CommentId, &inline_comment.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return inline_comment, nil
+}
+
+func (obj *sqlite3Impl) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
+	inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
+	count int64, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("DELETE FROM inline_comments WHERE inline_comments.updated_at < ?")
+
+	var __values []interface{}
+	__values = append(__values, inline_comment_updated_at_less.value())
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	__res, err := obj.driver.Exec(__stmt, __values...)
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	return count, nil
+
+}
+
 func (obj *sqlite3Impl) getLastGerritUser(ctx context.Context,
 	pk int64) (
 	gerrit_user *GerritUser, err error) {
@@ -979,6 +1193,24 @@ func (obj *sqlite3Impl) getLastGerritUser(ctx context.Context,
 		return nil, obj.makeErr(err)
 	}
 	return gerrit_user, nil
+
+}
+
+func (obj *sqlite3Impl) getLastInlineComment(ctx context.Context,
+	pk int64) (
+	inline_comment *InlineComment, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT inline_comments.comment_id, inline_comments.updated_at FROM inline_comments WHERE _rowid_ = ?")
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, pk)
+
+	inline_comment = &InlineComment{}
+	err = obj.driver.QueryRow(__stmt, pk).Scan(&inline_comment.CommentId, &inline_comment.UpdatedAt)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return inline_comment, nil
 
 }
 
@@ -1000,6 +1232,16 @@ func (impl sqlite3Impl) isConstraintError(err error) (
 func (obj *sqlite3Impl) deleteAll(ctx context.Context) (count int64, err error) {
 	var __res sql.Result
 	var __count int64
+	__res, err = obj.driver.Exec("DELETE FROM inline_comments;")
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	__count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+	count += __count
 	__res, err = obj.driver.Exec("DELETE FROM gerrit_users;")
 	if err != nil {
 		return 0, obj.makeErr(err)
@@ -1080,6 +1322,17 @@ func (rx *Rx) CreateNoReturn_GerritUser(ctx context.Context,
 
 }
 
+func (rx *Rx) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
+	inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
+	count int64, err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.Delete_InlineComment_By_UpdatedAt_Less(ctx, inline_comment_updated_at_less)
+
+}
+
 func (rx *Rx) Get_GerritUser_By_GerritUsername(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field) (
 	gerrit_user *GerritUser, err error) {
@@ -1101,6 +1354,17 @@ func (rx *Rx) UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.Context,
 	return tx.UpdateNoReturn_GerritUser_By_GerritUsername(ctx, gerrit_user_gerrit_username, update)
 }
 
+func (rx *Rx) Update_InlineComment_By_CommentId(ctx context.Context,
+	inline_comment_comment_id InlineComment_CommentId_Field,
+	update InlineComment_Update_Fields) (
+	inline_comment *InlineComment, err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.Update_InlineComment_By_CommentId(ctx, inline_comment_comment_id, update)
+}
+
 type Methods interface {
 	All_GerritUser_By_LastReport_Less(ctx context.Context,
 		gerrit_user_last_report_less GerritUser_LastReport_Field) (
@@ -1112,6 +1376,10 @@ type Methods interface {
 		optional GerritUser_Create_Fields) (
 		err error)
 
+	Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
+		inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
+		count int64, err error)
+
 	Get_GerritUser_By_GerritUsername(ctx context.Context,
 		gerrit_user_gerrit_username GerritUser_GerritUsername_Field) (
 		gerrit_user *GerritUser, err error)
@@ -1120,6 +1388,11 @@ type Methods interface {
 		gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
 		update GerritUser_Update_Fields) (
 		err error)
+
+	Update_InlineComment_By_CommentId(ctx context.Context,
+		inline_comment_comment_id InlineComment_CommentId_Field,
+		update InlineComment_Update_Fields) (
+		inline_comment *InlineComment, err error)
 }
 
 type TxMethods interface {

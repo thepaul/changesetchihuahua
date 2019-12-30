@@ -15,6 +15,11 @@ func UnixFloatTime(floatTime float64) time.Time {
 	return time.Unix(int64(floatTime), int64((floatTime-math.Floor(floatTime))*1e9))
 }
 
+// UnixFloatTime translates an int64 UNIX epoch time to a time.Time.
+func UnixInt64Time(unixTime int64) time.Time {
+	return time.Unix(unixTime, 0)
+}
+
 // Change refers to a change being reviewed, or that was already reviewed.
 type Change struct {
 	// Project specifies the project path within Gerrit.
@@ -118,7 +123,7 @@ type Approval struct {
 	// Value is the value assigned by the approval, usually a numerical score.
 	Value string
 	// OldValue is the previous approval score, usually a numerical score.
-	OldValue int
+	OldValue string
 	// GrantedOn is the time in seconds since the UNIX epoch when this approval was added or last
 	// updated.
 	GrantedOn int64

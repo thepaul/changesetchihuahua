@@ -23,6 +23,7 @@ import (
 type UserDirectory struct {
 	logger *zap.Logger
 	db     *dbx.DB
+	dbLock sync.Mutex // is this still necessary with sqlite?
 
 	cacheLock sync.RWMutex
 	cache     map[string]string
@@ -98,6 +99,9 @@ func initializeDirectoryDB(logger *zap.Logger, dbSource string) (*dbx.DB, error)
 }
 
 func (ud *UserDirectory) LookupGerritUser(ctx context.Context, gerritUsername string) (*dbx.GerritUser, error) {
+	ud.dbLock.Lock()
+	defer ud.dbLock.Unlock()
+
 	return ud.db.Get_GerritUser_By_GerritUsername(ctx, dbx.GerritUser_GerritUsername(gerritUsername))
 }
 
@@ -125,7 +129,12 @@ func (ud *UserDirectory) LookupChatIDForGerritUser(ctx context.Context, gerritUs
 }
 
 func (ud *UserDirectory) AssociateChatIDWithGerritUser(ctx context.Context, gerritUsername, chatID string) error {
-	err := ud.db.CreateNoReturn_GerritUser(ctx, dbx.GerritUser_GerritUsername(gerritUsername), dbx.GerritUser_ChatId(chatID), dbx.GerritUser_Create_Fields{})
+	err := func() error {
+		ud.dbLock.Lock()
+		defer ud.dbLock.Unlock()
+
+		return ud.db.CreateNoReturn_GerritUser(ctx, dbx.GerritUser_GerritUsername(gerritUsername), dbx.GerritUser_ChatId(chatID), dbx.GerritUser_Create_Fields{})
+	}()
 	if err != nil {
 		return err
 	}
@@ -141,13 +150,67 @@ func (ud *UserDirectory) AssociateChatIDWithGerritUser(ctx context.Context, gerr
 }
 
 func (ud *UserDirectory) GetAllUsersWhoseLastReportWasBefore(ctx context.Context, t time.Time) ([]*dbx.GerritUser, error) {
+	ud.dbLock.Lock()
+	defer ud.dbLock.Unlock()
+
 	return ud.db.All_GerritUser_By_LastReport_Less(ctx, dbx.GerritUser_LastReport(t))
 }
 
 func (ud *UserDirectory) UpdateLastReportTime(ctx context.Context, gerritUsername string, when time.Time) error {
+	ud.dbLock.Lock()
+	defer ud.dbLock.Unlock()
+
 	return ud.db.UpdateNoReturn_GerritUser_By_GerritUsername(ctx,
 		dbx.GerritUser_GerritUsername(gerritUsername),
 		dbx.GerritUser_Update_Fields{LastReport: dbx.GerritUser_LastReport(when)})
+}
+
+func (ud *UserDirectory) IdentifyNewInlineComments(ctx context.Context, commentsByID map[string]time.Time) (err error) {
+	if len(commentsByID) == 0 {
+		return nil
+	}
+	alternatives := make([]string, 0, len(commentsByID))
+	queryArgs := make([]interface{}, 0, len(commentsByID))
+	for commentID, _ := range commentsByID {
+		alternatives = append(alternatives, "comment_id = ?")
+		queryArgs = append(queryArgs, commentID)
+	}
+	query := `SELECT comment_id FROM inline_comments WHERE (` + strings.Join(alternatives, " OR ") + `)`
+
+	ud.dbLock.Lock()
+	defer ud.dbLock.Unlock()
+
+	rows, err := ud.db.DB.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errs.Combine(err, rows.Close()) }()
+
+	ud.logger.Sugar().Debugf("%d elements in commentsByID to start with", len(commentsByID))
+	for rows.Next() {
+		var foundCommentID string
+		if err := rows.Scan(&foundCommentID); err != nil {
+			return err
+		}
+		ud.logger.Sugar().Debugf("%s is not a new comment id", foundCommentID)
+		delete(commentsByID, foundCommentID)
+	}
+	ud.logger.Sugar().Debugf("%d elements in commentsByID now", len(commentsByID))
+
+	if len(commentsByID) > 0 {
+		values := make([]string, 0, len(commentsByID))
+		queryArgs := make([]interface{}, 0, len(commentsByID)*2)
+		for commentID, timeStamp := range commentsByID {
+			values = append(values, "(?, ?)")
+			queryArgs = append(queryArgs, commentID, timeStamp.UTC())
+		}
+		query := `INSERT INTO inline_comments (comment_id, updated_at) VALUES ` + strings.Join(values, ", ") + ` ON CONFLICT (comment_id) DO UPDATE SET updated_at = EXCLUDED.updated_at`
+		_, err := ud.db.ExecContext(ctx, query, queryArgs...)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // newMigrateLogWrapper is used to wrap a zap.Logger in a way that is usable

@@ -6,6 +6,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +32,8 @@ var (
 	minIntervalBetweenReports = flag.Duration("min-interval-between-reports", time.Hour*6, "Minimum amount of time that must elapse before more personalized Gerrit reports are sent to a given user")
 
 	removeProjectPrefix = flag.String("remove-project-prefix", "", "A common prefix on project names which can be removed if present before displaying in links")
+
+	inlineCommentMaxAge = flag.Duration("inline-comment-max-age", time.Hour*4, "Inline comments older than this will not be reported, even if not found in the cache")
 )
 
 const (
@@ -41,17 +46,15 @@ const (
 type MessageHandle interface{}
 
 type ChatSystem interface {
-	SupportsMessageEditing() bool
-	SupportsMessageDeletion() bool
-	SetIncomingMessageCallback(cb func(userID, chanID, text string))
-
-	SendToUserByEmail(ctx context.Context, email, message string) (MessageHandle, error)
-	SendToUserByID(ctx context.Context, id, message string) (MessageHandle, error)
-
+	SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string))
 	GetInfoByID(ctx context.Context, chatID string) (ChatUser, error)
 	LookupUserByEmail(ctx context.Context, email string) (string, error)
+	SendToUserByID(ctx context.Context, id, message string) (MessageHandle, error)
 
 	FormatChangeLink(project string, number int, url, subject string) string
+	FormatUserLink(chatID string) string
+	FormatLink(url, text string) string
+	UnwrapUserLink(userLink string) string
 }
 
 type ChatUser interface {
@@ -67,6 +70,9 @@ type App struct {
 	gerritClient *gerrit.Client
 
 	reporterLock sync.Mutex
+
+	adminChatID     string
+	adminLookupOnce sync.Once
 }
 
 func New(logger *zap.Logger, chat ChatSystem, directory *UserDirectory, gerritClient *gerrit.Client) *App {
@@ -98,28 +104,201 @@ func (w *waitGroup) Wait() {
 	_ = w.Group.Wait()
 }
 
-func (a *App) IncomingChatCommand(userID, chanID, text string) {
-	a.logger.Debug("got", zap.String("userid", userID), zap.String("chanid", chanID), zap.String("text", text))
-	if strings.HasPrefix(chanID, "D") && userID == "U0DJLDUSG" {
-		if text == "!personal-reports" {
-			a.ReportWaitingChangeSets(context.Background(), time.Now())
-		} else if strings.HasPrefix(text, "!assoc ") {
-			parts := strings.Split(text, " ")
-			if len(parts) != 3 {
-				a.logger.Error("bad !assoc usage", zap.String("issuer", userID))
-				return
-			}
+const chatCommandHandlingTimeout = time.Minute * 10
+
+func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string) {
+	if !isDM {
+		return
+	}
+	if !strings.HasPrefix(text, "!") {
+		return // only pay attention to !-prefixed messages, for now
+	}
+	logger := a.logger.With(zap.String("user-id", userID), zap.String("chan-id", chanID), zap.String("text", text))
+	logger.Debug("got chat command")
+	ctx, cancel := context.WithTimeout(context.Background(), chatCommandHandlingTimeout)
+	defer cancel()
+
+	adminChatID := a.getAdminID(ctx)
+	if userID != adminChatID {
+		return
+	}
+	reply := func(template string, args ...interface{}) {
+		_, _ = a.chat.SendToUserByID(ctx, userID, fmt.Sprintf(template, args...))
+	}
+
+	if text == "!personal-reports" {
+		logger.Info("admin requested personal review reports")
+		a.ReportWaitingChangeSets(ctx, time.Now())
+	} else if strings.HasPrefix(text, "!assoc ") {
+		parts := strings.Split(text, " ")
+		gerritUsername := ""
+		chatID := ""
+		if len(parts) == 3 {
+			gerritUsername = parts[1]
+			chatID = a.chat.UnwrapUserLink(parts[2])
+		}
+		if chatID == "" {
+			reply("bad !assoc usage [!assoc <gerritUsername> <chatUser>]")
+			logger.Error("bad !assoc usage")
+			return
+		}
+		logger = logger.With(zap.String("gerrit-username", gerritUsername), zap.String("chat-id", chatID))
+		if err := a.directory.AssociateChatIDWithGerritUser(ctx, gerritUsername, chatID); err != nil {
+			logger.Error("failed to create manual association", zap.Error(err))
+			reply("failed to create association")
+		} else {
+			logger.Info("admin created manual association")
+			reply("ok, %s = %s", gerritUsername, a.chat.FormatUserLink(chatID))
 		}
 	}
 }
 
-func (a *App) CommentAdded(ctx context.Context, author events.Account, change events.Change, comment string) {
-	if change.Owner.Username != author.Username {
-		a.notify(ctx, accountInfoFromEvent(&change.Owner),
-			fmt.Sprintf("%s commented on your changeset #%d (%q): %s",
-				author.Name, change.Number, change.Topic, comment))
+// getNewInlineComments fetches _all_ inline comments for the specified change and patchset
+// (because apparently that's the only way we can do it), and puts them all in the allInline map.
+// It then identifies those inline comments which were posted by the given gerrit user and after
+// the specified time, and consults the db to see which, if any, have not already been seen and
+// reported. The remainder are returned as newInline (which maps comment IDs to their timestamps).
+func (a *App) getNewInlineComments(ctx context.Context, changeID, patchSetID, username string, cutOffTime time.Time) (allInline map[string]*gerrit.CommentInfo, newInline map[string]time.Time, err error) {
+	allComments, err := a.gerritClient.ListRevisionComments(ctx, changeID, patchSetID)
+	if err != nil {
+		return nil, nil, err
 	}
-	// else, determine somehow if this is a reply to another user, and notify them?
+	allInline = make(map[string]*gerrit.CommentInfo)
+	newInline = make(map[string]time.Time)
+	for filePath, fileComments := range allComments {
+		for _, commentInfo := range fileComments {
+			commentInfoCopy := commentInfo
+			commentInfoCopy.Path = filePath
+			allInline[commentInfo.ID] = &commentInfoCopy
+			if commentInfo.Author.Username == username || commentInfo.Author.Username == "thepaul" {
+				updatedTime := gerrit.ParseTimestamp(commentInfo.Updated)
+				if updatedTime.After(cutOffTime) {
+					newInline[commentInfo.ID] = updatedTime
+				}
+			}
+		}
+	}
+	if err := a.directory.IdentifyNewInlineComments(ctx, newInline); err != nil {
+		return nil, nil, err
+	}
+	return allInline, newInline, nil
+}
+
+var (
+	commentsXCommentsRegex = regexp.MustCompile(`\s*\n\n\([0-9]+ comments?\)\s*$`)
+	commentsPatchSetRegex  = regexp.MustCompile(`^\s*Patch Set [0-9]+:\s*`)
+)
+
+// Because we are dealing with software, and software is terrible, the events that come from the
+// Gerrit webhooks plugin do not contain any info about inline comments. We have to get the info
+// from the API.
+//
+// Worse, there is apparently _no_ reliable way to identify which inline comments are associated
+// with this "comment-added" event. We could fudge it by using the timestamps, but we'd be bound
+// to get too many inline comments or too few in certain cases, depending on our implementation.
+// Instead of opening that pandora's box of confusion, we will try to keep track of which inline
+// comments we have seen before. Luckily, they do all have unique identifiers.
+//
+// Notification rules:
+//
+// - If change owner has posted a top-level comment, notify all the reviewers.
+// - If someone else has posted a top-level comment, notify change owner.
+// - For all new inline comments, notify the change owner and all prior thread participants (except
+//   for the commenter).
+func (a *App) CommentAdded(ctx context.Context, author events.Account, change events.Change, patchSet events.PatchSet, comment string, eventTime time.Time) {
+	owner := accountInfoFromEvent(&change.Owner)
+	commenter := accountInfoFromEvent(&author)
+	commenterChatID := a.lookupGerritUser(ctx, commenter)
+	commenterLink := a.formatUserLink(commenter, commenterChatID)
+	changeLink := a.formatChangeLink(&change)
+
+	// strip off the "Patch Set X:"	bit at the top; we'll convey that piece of info separately.
+	comment = commentsPatchSetRegex.ReplaceAllString(comment, "")
+	// and strip off the "(X comments)" bit at the bottom; we'll send the comments verbatim.
+	comment = commentsXCommentsRegex.ReplaceAllString(comment, "")
+	comment = strings.TrimSpace(comment)
+	// and if it's still longer than a single line, prepend a newline so it's easier to read
+	if strings.Contains(comment, "\n") {
+		comment = "\n" + comment
+	}
+
+	allInline, newInline, err := a.getNewInlineComments(ctx, change.ID, strconv.Itoa(patchSet.Number), author.Username, eventTime.Add(-*inlineCommentMaxAge))
+	if err != nil {
+		a.logger.Error("could not query inline comments via API", zap.Error(err), zap.String("change-id", change.ID), zap.Int("patch-set", patchSet.Number))
+		// fallback: use empty maps; assume there just aren't any inline comments to deal with
+	}
+
+	var wg waitGroup
+	var tellChangeOwner string
+	if owner.Username != author.Username {
+		tellChangeOwner = fmt.Sprintf("%s commented on %s ps%d: %s", commenterLink, changeLink, patchSet.Number, comment)
+	} else {
+		for _, reviewer := range change.AllReviewers {
+			reviewerInfo := accountInfoFromEvent(&reviewer)
+			msg := fmt.Sprintf("%s commented on %s ps%d, for which you are a reviewer: %s", commenterLink, changeLink, patchSet.Number, comment)
+			wg.Go(func() {
+				a.notify(ctx, reviewerInfo, msg)
+			})
+		}
+	}
+	newInlineCommentsSorted := sortInlineComments(allInline, newInline)
+	for _, commentInfo := range newInlineCommentsSorted {
+		// add to notification message for change owner
+		if owner.Username != author.Username {
+			tellChangeOwner += fmt.Sprintf("\n%s: %s",
+				a.formatSourceLink(change.URL, patchSet.Number, commentInfo),
+				commentInfo.Message)
+		}
+		// notify prior thread participants
+		inlineNotified := map[string]struct{}{author.Username: {}, owner.Username: {}}
+		priorComment, priorOk := allInline[commentInfo.InReplyTo]
+		for priorOk {
+			if _, ok := inlineNotified[priorComment.Author.Username]; !ok {
+				inlineNotified[priorComment.Author.Username] = struct{}{}
+				msg := fmt.Sprintf("%s replied to a thread on %s: %s", commenterLink, changeLink, commentInfo.Message)
+				wg.Go(func() {
+					a.notify(ctx, &priorComment.Author, msg)
+				})
+			}
+			priorComment, priorOk = allInline[priorComment.InReplyTo]
+		}
+	}
+	if tellChangeOwner != "" {
+		wg.Go(func() {
+			a.notify(ctx, owner, tellChangeOwner)
+		})
+	}
+
+	wg.Wait()
+}
+
+type byPathLineAndTime []*gerrit.CommentInfo
+
+func (b byPathLineAndTime) Len() int      { return len(b) }
+func (b byPathLineAndTime) Swap(i, j int) { b[i], b[j] = b[j], b[i] }
+func (b byPathLineAndTime) Less(i, j int) bool {
+	if b[i].Path < b[j].Path {
+		return true
+	}
+	if b[i].Path > b[j].Path {
+		return false
+	}
+	if b[i].Line < b[j].Line {
+		return true
+	}
+	if b[i].Line > b[j].Line {
+		return false
+	}
+	return b[i].Updated < b[j].Updated
+}
+
+func sortInlineComments(allComments map[string]*gerrit.CommentInfo, newComments map[string]time.Time) []*gerrit.CommentInfo {
+	sliceToSort := make([]*gerrit.CommentInfo, 0, len(newComments))
+	for commentID := range newComments {
+		sliceToSort = append(sliceToSort, allComments[commentID])
+	}
+	sort.Sort(byPathLineAndTime(sliceToSort))
+	return sliceToSort
 }
 
 func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change events.Change) {
@@ -161,43 +340,52 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 }
 
 func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, change events.Change, reason string) {
-	var wg waitGroup
 	if abandoner.Username != change.Owner.Username {
-		wg.Go(func() {
-			a.notify(ctx, accountInfoFromEvent(&change.Owner),
-				fmt.Sprintf("%s marked your change #%d (%q) as abandoned with the message: %s",
-					abandoner.Name, change.Number, change.Topic, reason))
-		})
+		a.notify(ctx, accountInfoFromEvent(&change.Owner),
+			fmt.Sprintf("%s marked your change #%d (%q) as abandoned with the message: %s",
+				abandoner.Name, change.Number, change.Topic, reason))
 	}
-
-	wg.Wait()
 }
 
-func (a *App) notify(ctx context.Context, gerritUser gerrit.AccountInfo, message string) {
+func (a *App) notify(ctx context.Context, gerritUser *gerrit.AccountInfo, message string) {
 	chatID := a.lookupGerritUser(ctx, gerritUser)
 	if chatID == "" {
 		return
 	}
 	_, err := a.chat.SendToUserByID(ctx, chatID, message)
 	if err != nil {
-		a.logger.Warn("failed to send notification",
+		a.logger.Error("failed to send notification",
+			zap.Error(err),
 			zap.String("chat-id", chatID),
 			zap.String("gerrit-username", gerritUser.Username))
 	}
 }
 
+func (a *App) getAdminID(ctx context.Context) string {
+	a.adminLookupOnce.Do(func() {
+		chatID, err := a.chat.LookupUserByEmail(ctx, *admin)
+		if err != nil {
+			a.logger.Error("could not look up admin in chat system", zap.String("admin-email", *admin), zap.Error(err))
+			return
+		}
+		a.adminChatID = chatID
+	})
+	return a.adminChatID
+}
+
 func (a *App) SendToAdmin(ctx context.Context, message string) {
-	if *admin == "" {
+	adminChatID := a.getAdminID(ctx)
+	if adminChatID == "" {
 		a.logger.Error("not sending message to admin; no admin configured", zap.String("message", message))
 		return
 	}
-	if _, err := a.chat.SendToUserByEmail(ctx, *admin, message); err != nil {
-		a.logger.Error("not sending message to admin; could not look up admin", zap.String("admin-email", *admin), zap.String("message", message), zap.Error(err))
+	if _, err := a.chat.SendToUserByID(ctx, adminChatID, message); err != nil {
+		a.logger.Error("failed to send message to admin", zap.String("admin-chat-id", adminChatID), zap.String("message", message), zap.Error(err))
 		return
 	}
 }
 
-func (a *App) lookupGerritUser(ctx context.Context, user gerrit.AccountInfo) string {
+func (a *App) lookupGerritUser(ctx context.Context, user *gerrit.AccountInfo) string {
 	chatID, err := a.directory.LookupChatIDForGerritUser(ctx, user.Username)
 	if err == nil {
 		return chatID
@@ -220,7 +408,7 @@ func (a *App) lookupGerritUser(ctx context.Context, user gerrit.AccountInfo) str
 			zap.Error(err))
 		return ""
 	}
-	// success- save this association in the db
+	// success- save this association
 	err = a.directory.AssociateChatIDWithGerritUser(ctx, user.Username, chatID)
 	if err != nil {
 		a.logger.Error("found new user association, but could not update directory db",
@@ -286,7 +474,7 @@ func (a *App) ReportWaitingChangeSets(ctx context.Context, t time.Time) {
 // Note this is pretty inefficient with respect to execution time and data transferred.
 // Since I don't expect this to be dealing with very large amounts of data, and performance
 // is very non-critical here, I would rather let it be a little slow as a simplistic way of
-// keeping down the load on the Slack and Gerrit servers. If this needs to be snappier,
+// keeping down the load on the chat and Gerrit servers. If this needs to be snappier,
 // though, this is probably a good place to start parallelizing.
 func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Logger, now, cutOffTime time.Time, acct *gerrit.AccountInfo) {
 	logger = logger.With(
@@ -325,6 +513,7 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 	// check if it's an ok time to send this user their review report
 	if !chatInfo.IsOnline() {
 		logger.Debug("User not online. Skipping.")
+		return
 	}
 	now = now.In(tz)
 	if !a.isGoodTimeForReport(acct, chatInfo, now) {
@@ -358,7 +547,7 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 		createdOn := gerrit.ParseTimestamp(ch.Created)
 		lastUpdated := gerrit.ParseTimestamp(ch.Updated)
 		reviewItem := fmt.Sprintf("%s\nRequested %s · Updated %s",
-			a.formatChangeLink(&ch),
+			a.formatChangeInfoLink(&ch),
 			prettyDate(now, createdOn),
 			prettyDate(now, lastUpdated))
 		reportItems = append(reportItems, reviewItem)
@@ -375,12 +564,37 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 	logger.Debug("successfully sent report")
 }
 
-func (a *App) formatChangeLink(ch *gerrit.ChangeInfo) string {
-	project := ch.Project
-	if *removeProjectPrefix != "" && strings.HasPrefix(project, *removeProjectPrefix) {
-		project = project[len(*removeProjectPrefix):]
+func (a *App) formatChangeLink(ch *events.Change) string {
+	return a.chat.FormatChangeLink(shortenProjectName(ch.Project), ch.Number, ch.URL, ch.Subject)
+}
+
+func (a *App) formatChangeInfoLink(ch *gerrit.ChangeInfo) string {
+	return a.chat.FormatChangeLink(shortenProjectName(ch.Project), ch.Number, a.gerritClient.URLForChange(ch), ch.Subject)
+}
+
+func (a *App) formatUserLink(account *gerrit.AccountInfo, chatID string) string {
+	if chatID != "" {
+		return a.chat.FormatUserLink(chatID)
 	}
-	return a.chat.FormatChangeLink(project, ch.Number, a.gerritClient.URLForChange(ch), ch.Subject)
+	// if we don't have a chat ID for them, just return the gerrit account description
+	return account.String()
+}
+
+func (a *App) formatSourceLink(changeURL string, patchSet int, commentInfo *gerrit.CommentInfo) string {
+	link := fmt.Sprintf("%s/%d/", changeURL, patchSet)
+	var linkText string
+	if commentInfo.Path == "" {
+		linkText = fmt.Sprintf("patchset %d", patchSet)
+	} else {
+		link += commentInfo.Path
+		linkText = commentInfo.Path
+	}
+	if commentInfo.Line > 0 {
+		lineStr := strconv.Itoa(commentInfo.Line)
+		link += "#" + lineStr
+		linkText += ":" + lineStr
+	}
+	return a.chat.FormatLink(link, linkText)
 }
 
 func prettyDate(now, then time.Time) string {
@@ -450,10 +664,17 @@ func (a *App) getAllChangesMatching(ctx context.Context, queryString string, opt
 	return changes, nil
 }
 
-func accountInfoFromEvent(eventUser *events.Account) gerrit.AccountInfo {
-	return gerrit.AccountInfo{
+func accountInfoFromEvent(eventUser *events.Account) *gerrit.AccountInfo {
+	return &gerrit.AccountInfo{
 		Name:     eventUser.Name,
 		Email:    eventUser.Email,
 		Username: eventUser.Username,
 	}
+}
+
+func shortenProjectName(projectName string) string {
+	if *removeProjectPrefix != "" && strings.HasPrefix(projectName, *removeProjectPrefix) {
+		projectName = projectName[len(*removeProjectPrefix):]
+	}
+	return projectName
 }
