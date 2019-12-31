@@ -33,7 +33,7 @@ var (
 
 	removeProjectPrefix = flag.String("remove-project-prefix", "", "A common prefix on project names which can be removed if present before displaying in links")
 
-	inlineCommentMaxAge = flag.Duration("inline-comment-max-age", time.Hour*4, "Inline comments older than this will not be reported, even if not found in the cache")
+	inlineCommentMaxAge = flag.Duration("inline-comment-max-age", time.Hour, "Inline comments older than this will not be reported, even if not found in the cache")
 )
 
 const (
