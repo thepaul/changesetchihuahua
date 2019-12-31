@@ -510,12 +510,12 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 
 	// check if it's an ok time to send this user their review report
 	if !chatInfo.IsOnline() {
-		logger.Debug("User not online. Skipping.")
+		logger.Info("User not online. Skipping.")
 		return
 	}
 	now = now.In(tz)
 	if !a.isGoodTimeForReport(acct, chatInfo, now) {
-		logger.Debug("Not a good time for a report. Skipping.",
+		logger.Info("Not a good time for a report. Skipping.",
 			zap.Time("user-localtime", now))
 		return
 	}
@@ -535,7 +535,7 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 	}
 
 	if len(changes) == 0 {
-		logger.Debug("No reviews assigned. No report needed.")
+		logger.Info("No reviews assigned. No report needed.")
 		return
 	}
 
@@ -559,7 +559,7 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 		return
 	}
 
-	logger.Debug("successfully sent report")
+	logger.Info("successfully sent report")
 }
 
 func (a *App) formatChangeLink(ch *events.Change) string {
