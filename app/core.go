@@ -230,10 +230,10 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	var wg waitGroup
 	var tellChangeOwner string
 	if owner.Username != author.Username {
-		tellChangeOwner = fmt.Sprintf("%s commented on %s ps%d: %s", commenterLink, changeLink, patchSet.Number, comment)
+		tellChangeOwner = fmt.Sprintf("%s commented on %s patchset %d: %s", commenterLink, changeLink, patchSet.Number, comment)
 	} else {
 		for _, reviewer := range change.AllReviewers {
-			msg := fmt.Sprintf("%s commented on %s ps%d, for which you are a reviewer: %s", commenterLink, changeLink, patchSet.Number, comment)
+			msg := fmt.Sprintf("%s commented on %s patchset %d, for which you are a reviewer: %s", commenterLink, changeLink, patchSet.Number, comment)
 			wg.Go(func() {
 				a.notify(ctx, &reviewer, msg)
 			})
