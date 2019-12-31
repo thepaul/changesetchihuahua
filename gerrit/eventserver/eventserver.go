@@ -26,13 +26,15 @@ func NewGerritEventSink(logger *zap.Logger, addr string, chihuahua *app.App) (*h
 		logger:    logger,
 		chihuahua: chihuahua,
 	}
+	mux := http.NewServeMux()
+	mux.Handle("/gerrit/", eventHandler)
 	stdLogger, err := zap.NewStdLogAt(logger, zap.ErrorLevel)
 	if err != nil {
 		return nil, errs.Wrap(err)
 	}
 	httpServer := &http.Server{
 		Addr:     addr,
-		Handler:  eventHandler,
+		Handler:  mux,
 		ErrorLog: stdLogger,
 	}
 	return httpServer, nil
