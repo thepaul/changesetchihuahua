@@ -636,8 +636,8 @@ func (a *App) isGoodTimeForReport(_ *gerrit.AccountInfo, _ ChatUser, t time.Time
 }
 
 func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername string) ([]gerrit.ChangeInfo, error) {
-	queryString := fmt.Sprintf("reviewer:\"%s\" is:open -reviewedby:\"%s\"",
-		gerritUsername, gerritUsername)
+	queryString := fmt.Sprintf("(reviewer:\"%[1]s\" OR cc:\"%[1]s\") is:open -reviewedby:\"%[1]s\" -owner:\"%[1]s\" -is:wip",
+		gerritUsername)
 	return a.getAllChangesMatching(ctx, queryString, &gerrit.QueryChangesOpts{
 		Limit:                    gerritQueryPageSize,
 		DescribeCurrentRevision:  true,
