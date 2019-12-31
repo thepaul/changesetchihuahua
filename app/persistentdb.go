@@ -230,6 +230,7 @@ type migrateLogWrapper struct {
 }
 
 func (w migrateLogWrapper) Printf(format string, v ...interface{}) {
+	format = strings.TrimRight(format, "\n")
 	w.logger.Infof(format, v...)
 }
 
