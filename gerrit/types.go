@@ -43,16 +43,6 @@ type AccountInfo struct {
 	MoreAccounts bool `json:"_more_accounts,omitempty"`
 }
 
-func (ai *AccountInfo) String() string {
-	str := ai.Username
-	if ai.Name != "" {
-		str += " (" + ai.Name + ")"
-	} else if ai.Email != "" {
-		str += " (" + ai.Email + ")"
-	}
-	return str
-}
-
 // LabelInfo contains information about a label on a change, always corresponding to the
 // current patch set.
 type LabelInfo struct {

@@ -82,6 +82,16 @@ type Account struct {
 	Username string
 }
 
+func (a *Account) String() string {
+	str := a.Username
+	if a.Name != "" {
+		str += " (" + a.Name + ")"
+	} else if a.Email != "" {
+		str += " (" + a.Email + ")"
+	}
+	return str
+}
+
 // PatchSet refers to a specific patchset within a change.
 type PatchSet struct {
 	// Number is the patchset number.

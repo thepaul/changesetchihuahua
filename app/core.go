@@ -206,10 +206,9 @@ var (
 // - For all new inline comments, notify the change owner and all prior thread participants (except
 //   for the commenter).
 func (a *App) CommentAdded(ctx context.Context, author events.Account, change events.Change, patchSet events.PatchSet, comment string, eventTime time.Time) {
-	owner := accountInfoFromEvent(&change.Owner)
-	commenter := accountInfoFromEvent(&author)
-	commenterChatID := a.lookupGerritUser(ctx, commenter)
-	commenterLink := a.formatUserLink(commenter, commenterChatID)
+	owner := &change.Owner
+	commenterChatID := a.lookupGerritUser(ctx, &author)
+	commenterLink := a.formatUserLink(&author, commenterChatID)
 	changeLink := a.formatChangeLink(&change)
 
 	// strip off the "Patch Set X:"	bit at the top; we'll convey that piece of info separately.
@@ -234,10 +233,9 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 		tellChangeOwner = fmt.Sprintf("%s commented on %s ps%d: %s", commenterLink, changeLink, patchSet.Number, comment)
 	} else {
 		for _, reviewer := range change.AllReviewers {
-			reviewerInfo := accountInfoFromEvent(&reviewer)
 			msg := fmt.Sprintf("%s commented on %s ps%d, for which you are a reviewer: %s", commenterLink, changeLink, patchSet.Number, comment)
 			wg.Go(func() {
-				a.notify(ctx, reviewerInfo, msg)
+				a.notify(ctx, &reviewer, msg)
 			})
 		}
 	}
@@ -257,7 +255,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 				inlineNotified[priorComment.Author.Username] = struct{}{}
 				msg := fmt.Sprintf("%s replied to a thread on %s: %s", commenterLink, changeLink, commentInfo.Message)
 				wg.Go(func() {
-					a.notify(ctx, &priorComment.Author, msg)
+					a.notify(ctx, accountFromAccountInfo(&priorComment.Author), msg)
 				})
 			}
 			priorComment, priorOk = allInline[priorComment.InReplyTo]
@@ -302,7 +300,7 @@ func sortInlineComments(allComments map[string]*gerrit.CommentInfo, newComments 
 }
 
 func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change events.Change) {
-	a.notify(ctx, accountInfoFromEvent(&reviewer),
+	a.notify(ctx, &reviewer,
 		fmt.Sprintf("You were added as a reviewer for changeset #%d (%q)",
 			change.Number, change.Topic))
 	// we want to tell change.Owner about this, but only if they weren't the one who added
@@ -316,7 +314,7 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 	var wg waitGroup
 	if uploader.Username != change.Owner.Username {
 		wg.Go(func() {
-			a.notify(ctx, accountInfoFromEvent(&change.Owner),
+			a.notify(ctx, &change.Owner,
 				fmt.Sprintf("%s uploaded a new patchset on your change #%d (%q)",
 					uploader.Name, change.Number, change.Topic))
 		})
@@ -329,7 +327,7 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 		}
 		if uploader.Username != reviewer.Username {
 			wg.Go(func() {
-				a.notify(ctx, accountInfoFromEvent(&reviewer),
+				a.notify(ctx, &reviewer,
 					fmt.Sprintf("%s uploaded a new patchset on change #%d (%q), on which you are a reviewer",
 						uploader.Name, change.Number, change.Topic))
 			})
@@ -341,13 +339,13 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 
 func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, change events.Change, reason string) {
 	if abandoner.Username != change.Owner.Username {
-		a.notify(ctx, accountInfoFromEvent(&change.Owner),
+		a.notify(ctx, &change.Owner,
 			fmt.Sprintf("%s marked your change #%d (%q) as abandoned with the message: %s",
 				abandoner.Name, change.Number, change.Topic, reason))
 	}
 }
 
-func (a *App) notify(ctx context.Context, gerritUser *gerrit.AccountInfo, message string) {
+func (a *App) notify(ctx context.Context, gerritUser *events.Account, message string) {
 	chatID := a.lookupGerritUser(ctx, gerritUser)
 	if chatID == "" {
 		return
@@ -385,7 +383,7 @@ func (a *App) SendToAdmin(ctx context.Context, message string) {
 	}
 }
 
-func (a *App) lookupGerritUser(ctx context.Context, user *gerrit.AccountInfo) string {
+func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string {
 	chatID, err := a.persistentDB.LookupChatIDForGerritUser(ctx, user.Username)
 	if err == nil {
 		return chatID
@@ -572,7 +570,7 @@ func (a *App) formatChangeInfoLink(ch *gerrit.ChangeInfo) string {
 	return a.chat.FormatChangeLink(shortenProjectName(ch.Project), ch.Number, a.gerritClient.URLForChange(ch), ch.Subject)
 }
 
-func (a *App) formatUserLink(account *gerrit.AccountInfo, chatID string) string {
+func (a *App) formatUserLink(account *events.Account, chatID string) string {
 	if chatID != "" {
 		return a.chat.FormatUserLink(chatID)
 	}
@@ -664,11 +662,11 @@ func (a *App) getAllChangesMatching(ctx context.Context, queryString string, opt
 	return changes, nil
 }
 
-func accountInfoFromEvent(eventUser *events.Account) *gerrit.AccountInfo {
-	return &gerrit.AccountInfo{
-		Name:     eventUser.Name,
-		Email:    eventUser.Email,
-		Username: eventUser.Username,
+func accountFromAccountInfo(accountInfo *gerrit.AccountInfo) *events.Account {
+	return &events.Account{
+		Name:     accountInfo.Name,
+		Email:    accountInfo.Email,
+		Username: accountInfo.Username,
 	}
 }
 
