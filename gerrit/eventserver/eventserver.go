@@ -71,11 +71,15 @@ func (srv *EventHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case *events.CommentAddedEvent:
 			srv.chihuahua.CommentAdded(ctx, ev.Author, ev.Change, ev.PatchSet, ev.Comment, ev.EventCreatedAt())
 		case *events.ReviewerAddedEvent:
-			srv.chihuahua.ReviewerAdded(ctx, ev.Reviewer, ev.Change)
+			srv.chihuahua.ReviewerAdded(ctx, ev.Reviewer, ev.Change, ev.EventCreatedAt())
 		case *events.PatchSetCreatedEvent:
 			srv.chihuahua.PatchSetCreated(ctx, ev.Uploader, ev.Change, ev.PatchSet)
 		case *events.ChangeAbandonedEvent:
 			srv.chihuahua.ChangeAbandoned(ctx, ev.Abandoner, ev.Change, ev.Reason)
+		case *events.ChangeMergedEvent:
+			srv.chihuahua.ChangeMerged(ctx, ev.Submitter, ev.Change, ev.PatchSet)
+		case *events.AssigneeChangedEvent:
+			srv.chihuahua.AssigneeChanged(ctx, ev.Changer, ev.Change, ev.OldAssignee)
 		case *events.DroppedOutputEvent:
 			srv.logger.Warn("gerrit reports dropped events")
 		case *events.ReviewerDeletedEvent:

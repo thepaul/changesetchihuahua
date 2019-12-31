@@ -29,7 +29,7 @@ var (
 
 	reportTimeHour = flag.Int("user-report-hour", 11, "Hour (in 24-hour time) in user's local time when review report should be sent, if they are online")
 
-	minIntervalBetweenReports = flag.Duration("min-interval-between-reports", time.Hour*6, "Minimum amount of time that must elapse before more personalized Gerrit reports are sent to a given user")
+	minIntervalBetweenReports = flag.Duration("min-interval-between-reports", time.Hour*8, "Minimum amount of time that must elapse before more personalized Gerrit reports are sent to a given user")
 
 	removeProjectPrefix = flag.String("remove-project-prefix", "", "A common prefix on project names which can be removed if present before displaying in links")
 
@@ -207,8 +207,7 @@ var (
 //   for the commenter).
 func (a *App) CommentAdded(ctx context.Context, author events.Account, change events.Change, patchSet events.PatchSet, comment string, eventTime time.Time) {
 	owner := &change.Owner
-	commenterChatID := a.lookupGerritUser(ctx, &author)
-	commenterLink := a.formatUserLink(&author, commenterChatID)
+	commenterLink := a.prepareUserLink(ctx, &author)
 	changeLink := a.formatChangeLink(&change)
 
 	// strip off the "Patch Set X:"	bit at the top; we'll convey that piece of info separately.
@@ -299,15 +298,64 @@ func sortInlineComments(allComments map[string]*gerrit.CommentInfo, newComments 
 	return sliceToSort
 }
 
-func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change events.Change) {
-	a.notify(ctx, &reviewer,
-		fmt.Sprintf("You were added as a reviewer for changeset #%d (%q)",
-			change.Number, change.Topic))
-	// we want to tell change.Owner about this, but only if they weren't the one who added
-	// the reviewer. unclear how to tell yet.
-	//a.notify(ctx, change.Owner,
-	//	fmt.Sprintf("%s was added as a reviewer on your changeset #%d (%q)",
-	//		reviewer.Name, change.Number, change.Topic))
+func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change events.Change, eventTime time.Time) {
+	changeLink := a.formatChangeLink(&change)
+	// We want to determine _who_ added the reviewer. If it was the reviewer themself, we
+	// don't need to notify. and if it wasn't, we want to say who did it in the notification.
+	// Unfortunately, the reviewer-added event doesn't carry that information. We turn to the
+	// Gerrit API again.
+	changeInfo, err := a.gerritClient.GetChangeEx(ctx, change.ID, &gerrit.QueryChangesOpts{
+		DescribeDetailedAccounts: true,
+		DescribeReviewerUpdates:  true,
+	})
+	if err != nil {
+		a.logger.Error("could not query inline comments via API", zap.Error(err), zap.String("change-id", change.ID))
+		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer for %s", changeLink))
+		return
+	}
+
+	// Identify the reviewer update closest to the time of our event that adds the specified
+	// user. This isn't 100% guaranteed accurate, but should be sufficient.
+	var closest gerrit.ReviewerUpdateInfo
+	const maxTimeDiff = time.Hour
+	closestTimeDiff := maxTimeDiff
+	for _, rui := range changeInfo.ReviewerUpdates {
+		if rui.State == "REVIEWER" && rui.Reviewer.Username == reviewer.Username {
+			timeDiff := absDuration(eventTime.Sub(gerrit.ParseTimestamp(rui.Updated)))
+			if closestTimeDiff == maxTimeDiff || timeDiff < closestTimeDiff {
+				closest = rui
+				closestTimeDiff = timeDiff
+			}
+		}
+	}
+
+	// now, do appropriate notifications based on the results
+	if closestTimeDiff < maxTimeDiff {
+		// we identified a likely update record
+		updater := accountFromAccountInfo(&closest.UpdatedBy)
+		updaterLink := a.prepareUserLink(ctx, updater)
+		if closest.UpdatedBy.Username == reviewer.Username {
+			// the reviewer added themself.
+			if reviewer.Username != change.Owner.Username {
+				// notify the owner
+				a.notify(ctx, &change.Owner, fmt.Sprintf("%s signed up as a reviewer on your change %s",
+					updaterLink, changeLink))
+			}
+		} else {
+			// the updater added someone else as a reviewer
+			a.notify(ctx, &reviewer, fmt.Sprintf("%s added you as a reviewer on %s",
+				updaterLink, changeLink))
+			// if the owner is the same as the reviewer _or_ the updater, we don't need to notify them also
+			if change.Owner.Username != reviewer.Username && change.Owner.Username != updater.Username {
+				a.notify(ctx, &change.Owner, fmt.Sprintf("%s added %s as a reviewer on your change %s",
+					updaterLink, a.prepareUserLink(ctx, &reviewer), changeLink))
+			}
+		}
+	} else {
+		// the records in Gerrit are alarmingly different from what the event told us. oh well?
+		a.logger.Error("could not identify reviewer update entity via API", zap.String("change-id", change.ID), zap.String("reviewer", reviewer.Username), zap.Time("event-time", eventTime))
+		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer for %s", changeLink))
+	}
 }
 
 func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, change events.Change, patchSet events.PatchSet) {
@@ -315,8 +363,10 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 	if uploader.Username != change.Owner.Username {
 		wg.Go(func() {
 			a.notify(ctx, &change.Owner,
-				fmt.Sprintf("%s uploaded a new patchset on your change #%d (%q)",
-					uploader.Name, change.Number, change.Topic))
+				fmt.Sprintf("%s uploaded a new patchset #%d on your change %s",
+					a.prepareUserLink(ctx, &uploader),
+					patchSet.Number,
+					a.formatChangeLink(&change)))
 		})
 	}
 
@@ -347,8 +397,7 @@ func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, cha
 
 func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change events.Change, patchSet events.PatchSet) {
 	if submitter.Username != change.Owner.Username {
-		submitterChatID := a.lookupGerritUser(ctx, &submitter)
-		a.notify(ctx, &change.Owner, fmt.Sprintf("%s merged patchset #%d of your change %s.", a.formatUserLink(&submitter, submitterChatID), patchSet.Number, a.formatChangeLink(&change)))
+		a.notify(ctx, &change.Owner, fmt.Sprintf("%s merged patchset #%d of your change %s.", a.prepareUserLink(ctx, &submitter), patchSet.Number, a.formatChangeLink(&change)))
 	}
 }
 
@@ -581,6 +630,11 @@ func (a *App) formatChangeInfoLink(ch *gerrit.ChangeInfo) string {
 	return a.chat.FormatChangeLink(shortenProjectName(ch.Project), ch.Number, a.gerritClient.URLForChange(ch), ch.Subject)
 }
 
+func (a *App) prepareUserLink(ctx context.Context, account *events.Account) string {
+	chatID := a.lookupGerritUser(ctx, account)
+	return a.formatUserLink(account, chatID)
+}
+
 func (a *App) formatUserLink(account *events.Account, chatID string) string {
 	if chatID != "" {
 		return a.chat.FormatUserLink(chatID)
@@ -686,4 +740,11 @@ func shortenProjectName(projectName string) string {
 		projectName = projectName[len(*removeProjectPrefix):]
 	}
 	return projectName
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
