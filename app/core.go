@@ -345,6 +345,17 @@ func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, cha
 	}
 }
 
+func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change events.Change, patchSet events.PatchSet) {
+	if submitter.Username != change.Owner.Username {
+		submitterChatID := a.lookupGerritUser(ctx, &submitter)
+		a.notify(ctx, &change.Owner, fmt.Sprintf("%s merged patchset #%d of your change %s.", a.formatUserLink(&submitter, submitterChatID), patchSet.Number, a.formatChangeLink(&change)))
+	}
+}
+
+func (a *App) AssigneeChanged(ctx context.Context, changer events.Account, change events.Change, oldAssignee events.Account) {
+	// We don't use the Assignee field for anything right now, I think. Probably good to ignore this
+}
+
 func (a *App) notify(ctx context.Context, gerritUser *events.Account, message string) {
 	chatID := a.lookupGerritUser(ctx, gerritUser)
 	if chatID == "" {
