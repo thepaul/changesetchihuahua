@@ -248,7 +248,7 @@ func (u *slackUser) RealName() string {
 }
 
 func (u *slackUser) IsOnline() bool {
-	return u.presence.Online
+	return u.presence.Presence == "active"
 }
 
 func (u *slackUser) TimeLocation() *time.Location {
