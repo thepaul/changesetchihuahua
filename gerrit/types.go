@@ -196,7 +196,7 @@ type ChangeInfo struct {
 	// Reviewers is a map that maps a reviewer state to a list of AccountInfo entities. Possible
 	// reviewer states are "REVIEWER", "CC", and "REMOVED". Only set if DescribeDetailedLabels
 	// is requested.
-	Reviewers map[string]AccountInfo
+	Reviewers map[string][]AccountInfo
 	// PendingReviewers is updates to Reviewers that have been made while the change was in the
 	// WIP state. Only present on WIP changes and only if there are pending reviewer updates to
 	// report. These are reviewers who have not yet been notified about being added to or
@@ -282,6 +282,14 @@ type ReviewerUpdateInfo struct {
 	Reviewer *AccountInfo
 	// State is the reviewer state, one of "REVIEWER", "CC" or "REMOVED".
 	State string
+}
+
+// ReviewerInfo entity contains information about a reviewer and its votes on a change.
+type ReviewerInfo struct {
+	AccountInfo
+	// Approvals is the approvals of the reviewer as a map that maps the label names to the
+	// approval values (“-2”, “-1”, “0”, “+1”, “+2”).
+	Approvals map[string]string
 }
 
 // ChangeMessageInfo contains information about a message attached to a change.

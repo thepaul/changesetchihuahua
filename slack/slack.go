@@ -43,7 +43,13 @@ func (lw logWrapper) Output(callDepth int, s string) error {
 	return nil
 }
 
-func NewSlackInterface(logger *zap.Logger) (*slackInterface, error) {
+type EventedChatSystem interface {
+	app.ChatSystem
+
+	HandleEvents(ctx context.Context, chihuahua *app.App) error
+}
+
+func NewSlackInterface(logger *zap.Logger) (EventedChatSystem, error) {
 	if botOAuthToken == nil {
 		return nil, errors.New("no bot oauth token set")
 	}
@@ -221,8 +227,8 @@ func (s *slackInterface) FormatLink(url, text string) string {
 }
 
 func (s *slackInterface) UnwrapUserLink(userLink string) string {
-	if len(userLink) > 3 && userLink[0] == '<' && userLink[1] == '@' && userLink[len(userLink)-1] == '>'	{
-		return userLink[2:len(userLink)-1]
+	if len(userLink) > 3 && userLink[0] == '<' && userLink[1] == '@' && userLink[len(userLink)-1] == '>' {
+		return userLink[2 : len(userLink)-1]
 	}
 	return ""
 }
@@ -239,7 +245,7 @@ type MessageHandle struct {
 }
 
 type slackUser struct {
-	info *slack.User
+	info     *slack.User
 	presence *slack.UserPresence
 }
 

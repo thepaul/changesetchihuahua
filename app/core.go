@@ -227,16 +227,16 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	}
 
 	var wg waitGroup
+	defer wg.Wait()
+
+	msg := fmt.Sprintf("%s commented on %s patchset %d: %s", commenterLink, changeLink, patchSet.Number, comment)
 	var tellChangeOwner string
 	if owner.Username != author.Username {
-		tellChangeOwner = fmt.Sprintf("%s commented on %s patchset %d: %s", commenterLink, changeLink, patchSet.Number, comment)
-	} else {
-		for _, reviewer := range change.AllReviewers {
-			msg := fmt.Sprintf("%s commented on %s patchset %d, for which you are a reviewer: %s", commenterLink, changeLink, patchSet.Number, comment)
-			wg.Go(func() {
-				a.notify(ctx, &reviewer, msg)
-			})
-		}
+		tellChangeOwner = msg
+	} else if comment != "" {
+		wg.Go(func() {
+			a.notifyAllReviewers(ctx, change.ID, msg, []string{author.Username, change.Owner.Username})
+		})
 	}
 	newInlineCommentsSorted := sortInlineComments(allInline, newInline)
 	for _, commentInfo := range newInlineCommentsSorted {
@@ -265,8 +265,6 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 			a.notify(ctx, owner, tellChangeOwner)
 		})
 	}
-
-	wg.Wait()
 }
 
 type byPathLineAndTime []*gerrit.CommentInfo
@@ -310,7 +308,7 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 	})
 	if err != nil {
 		a.logger.Error("could not query inline comments via API", zap.Error(err), zap.String("change-id", change.ID))
-		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer for %s", changeLink))
+		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer or CC for %s", changeLink))
 		return
 	}
 
@@ -320,7 +318,7 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 	const maxTimeDiff = time.Hour
 	closestTimeDiff := maxTimeDiff
 	for _, rui := range changeInfo.ReviewerUpdates {
-		if rui.State == "REVIEWER" && rui.Reviewer.Username == reviewer.Username {
+		if (rui.State == "REVIEWER" || rui.State == "CC") && rui.Reviewer.Username == reviewer.Username {
 			timeDiff := absDuration(eventTime.Sub(gerrit.ParseTimestamp(rui.Updated)))
 			if closestTimeDiff == maxTimeDiff || timeDiff < closestTimeDiff {
 				closest = rui
@@ -334,75 +332,146 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 		// we identified a likely update record
 		updater := accountFromAccountInfo(&closest.UpdatedBy)
 		updaterLink := a.prepareUserLink(ctx, updater)
-		if closest.UpdatedBy.Username == reviewer.Username {
+		what := "as a reviewer"
+		if closest.State == "CC" {
+			what = "to be CC'd"
+		}
+		if updater.Username == reviewer.Username {
 			// the reviewer added themself.
 			if reviewer.Username != change.Owner.Username {
 				// notify the owner
-				a.notify(ctx, &change.Owner, fmt.Sprintf("%s signed up as a reviewer on your change %s",
-					updaterLink, changeLink))
+				a.notify(ctx, &change.Owner, fmt.Sprintf("%s signed up %s on your change %s",
+					updaterLink, what, changeLink))
 			}
 		} else {
 			// the updater added someone else as a reviewer
-			a.notify(ctx, &reviewer, fmt.Sprintf("%s added you as a reviewer on %s",
-				updaterLink, changeLink))
+			a.notify(ctx, &reviewer, fmt.Sprintf("%s added you %s on %s",
+				updaterLink, what, changeLink))
 			// if the owner is the same as the reviewer _or_ the updater, we don't need to notify them also
 			if change.Owner.Username != reviewer.Username && change.Owner.Username != updater.Username {
-				a.notify(ctx, &change.Owner, fmt.Sprintf("%s added %s as a reviewer on your change %s",
-					updaterLink, a.prepareUserLink(ctx, &reviewer), changeLink))
+				a.notify(ctx, &change.Owner, fmt.Sprintf("%s added %s %s on your change %s",
+					updaterLink, a.prepareUserLink(ctx, &reviewer), what, changeLink))
 			}
 		}
 	} else {
 		// the records in Gerrit are alarmingly different from what the event told us. oh well?
 		a.logger.Error("could not identify reviewer update entity via API", zap.String("change-id", change.ID), zap.String("reviewer", reviewer.Username), zap.Time("event-time", eventTime))
-		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer for %s", changeLink))
+		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer or CC for %s", changeLink))
 	}
 }
 
 func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, change events.Change, patchSet events.PatchSet) {
 	var wg waitGroup
+	defer wg.Wait()
+
+	uploaderLink := a.prepareUserLink(ctx, &uploader)
+	changeLink := a.formatChangeLink(&change)
+
 	if uploader.Username != change.Owner.Username {
 		wg.Go(func() {
 			a.notify(ctx, &change.Owner,
 				fmt.Sprintf("%s uploaded a new patchset #%d on your change %s",
-					a.prepareUserLink(ctx, &uploader),
-					patchSet.Number,
-					a.formatChangeLink(&change)))
+					uploaderLink, patchSet.Number, changeLink))
 		})
 	}
 
-	for _, reviewer := range change.AllReviewers {
-		if reviewer.Username == uploader.Username {
-			// skip same user
-			continue
+	// events.Change does have an AllReviewers field, but apparently it's not populated for
+	// patchset-created events. It's API time
+	changeInfo, err := a.gerritClient.GetPatchSetInfo(ctx, change.ID, strconv.Itoa(patchSet.Number))
+	if err != nil {
+		a.logger.Error("could not fetch patchset info for change, so can not notify reviewers",
+			zap.Error(err), zap.String("change-id", change.ID))
+		return
+	}
+	var reviewerMsg, ccMsg string
+	if patchSet.Number == 1 {
+		// this is a whole new changeset. notify accordingly.
+		reviewerMsg = fmt.Sprintf("%s created a new changeset %s, with you as a reviewer.",
+			uploaderLink, changeLink)
+		ccMsg = fmt.Sprintf("%s created a new changeset %s, with you CC'd.",
+			uploaderLink, changeLink)
+	} else {
+		changeType := "REWORK"
+		// this map should have exactly one entry, but we can't predict its key :/
+		for _, revisionInfo := range changeInfo.Revisions {
+			changeType = revisionInfo.Kind
 		}
-		if uploader.Username != reviewer.Username {
-			wg.Go(func() {
-				a.notify(ctx, &reviewer,
-					fmt.Sprintf("%s uploaded a new patchset on change #%d (%q), on which you are a reviewer",
-						uploader.Name, change.Number, change.Topic))
-			})
+		switch changeType {
+		case "TRIVIAL_REBASE":
+			reviewerMsg = fmt.Sprintf("%s rebased change %s into patchset #%d",
+				uploaderLink, changeLink, patchSet.Number)
+		case "NO_CHANGE", "NO_CODE_CHANGE":
+			reviewerMsg = fmt.Sprintf("%s created a new patchset #%d on change %s (no code changes)",
+				uploaderLink, patchSet.Number, changeLink)
+		default:
+			diffURL := a.gerritClient.DiffURLBetweenPatchSets(&changeInfo, patchSet.Number-1, patchSet.Number)
+			reviewerMsg = fmt.Sprintf("%s uploaded a new patchset #%d on change %s (%s)",
+				uploaderLink, patchSet.Number, changeLink, a.chat.FormatLink(diffURL, "see changes"))
 		}
+		ccMsg = reviewerMsg
 	}
 
-	wg.Wait()
+	// send the reviewerMsg or ccMsg, as appropriate, to all relevant users
+	haveNotified := map[string]struct{}{uploader.Username: {}, change.Owner.Username: {}}
+	messages := []string{reviewerMsg, ccMsg}
+	for i, reviewerGroup := range []string{"REVIEWER", "CC"} {
+		useMsg := messages[i]
+		for _, reviewer := range changeInfo.Reviewers[reviewerGroup] {
+			if _, ok := haveNotified[reviewer.Username]; !ok {
+				haveNotified[reviewer.Username] = struct{}{}
+				reviewerInfo := accountFromAccountInfo(&reviewer)
+				wg.Go(func() {
+					a.notify(ctx, reviewerInfo, useMsg)
+				})
+			}
+		}
+	}
 }
 
 func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, change events.Change, reason string) {
+	msg := fmt.Sprintf("%s marked change %s as abandoned with the message: %s",
+		a.prepareUserLink(ctx, &abandoner), a.formatChangeLink(&change), reason)
 	if abandoner.Username != change.Owner.Username {
-		a.notify(ctx, &change.Owner,
-			fmt.Sprintf("%s marked your change #%d (%q) as abandoned with the message: %s",
-				abandoner.Name, change.Number, change.Topic, reason))
+		a.notify(ctx, &change.Owner, msg)
 	}
+
+	a.notifyAllReviewers(ctx, change.ID, msg, []string{abandoner.Username, change.Owner.Username})
 }
 
 func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change events.Change, patchSet events.PatchSet) {
+	msg := fmt.Sprintf("%s merged patchset #%d of change %s.", a.prepareUserLink(ctx, &submitter), patchSet.Number, a.formatChangeLink(&change))
 	if submitter.Username != change.Owner.Username {
-		a.notify(ctx, &change.Owner, fmt.Sprintf("%s merged patchset #%d of your change %s.", a.prepareUserLink(ctx, &submitter), patchSet.Number, a.formatChangeLink(&change)))
+		a.notify(ctx, &change.Owner, msg)
 	}
+
+	a.notifyAllReviewers(ctx, change.ID, msg, []string{submitter.Username, change.Owner.Username})
 }
 
 func (a *App) AssigneeChanged(ctx context.Context, changer events.Account, change events.Change, oldAssignee events.Account) {
 	// We don't use the Assignee field for anything right now, I think. Probably good to ignore this
+}
+
+func (a *App) notifyAllReviewers(ctx context.Context, changeID, msg string, except []string) {
+	reviewers, err := a.gerritClient.GetChangeReviewers(ctx, changeID)
+	if err != nil {
+		a.logger.Error("could not query reviewers for change, so can not notify reviewers",
+			zap.Error(err), zap.String("change-id", changeID))
+		return
+	}
+	haveNotified := make(map[string]struct{})
+	for _, exception := range except {
+		haveNotified[exception] = struct{}{}
+	}
+
+	var wg waitGroup
+	defer wg.Wait()
+	for _, reviewer := range reviewers {
+		if _, ok := haveNotified[reviewer.Username]; !ok {
+			haveNotified[reviewer.Username] = struct{}{}
+			reviewerInfo := accountFromAccountInfo(&reviewer.AccountInfo)
+			wg.Go(func() { a.notify(ctx, reviewerInfo, msg) })
+		}
+	}
 }
 
 func (a *App) notify(ctx context.Context, gerritUser *events.Account, message string) {
@@ -675,16 +744,17 @@ func prettyDate(now, then time.Time) string {
 		// no sub-second precision here
 		return "now"
 	}
-	if delta < time.Minute {
+	switch {
+	case delta < time.Minute:
 		timeUnits = "second"
 		unitDuration = time.Second
-	} else if delta < time.Hour {
+	case delta < time.Hour:
 		timeUnits = "minute"
 		unitDuration = time.Minute
-	} else if delta < (time.Hour * 24) {
+	case delta < (time.Hour * 24):
 		timeUnits = "hour"
 		unitDuration = time.Hour
-	} else {
+	default:
 		timeUnits = "day"
 		unitDuration = time.Hour * 24
 	}

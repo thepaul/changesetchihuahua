@@ -26,7 +26,7 @@ func OpenClient(ctx context.Context, serverURL string) (*Client, error) {
 		return nil, err
 	}
 	if !strings.HasSuffix(urlObj.Path, "/") {
-		urlObj.Path = urlObj.Path + "/"
+		urlObj.Path += "/"
 	}
 
 	client := &Client{
@@ -47,6 +47,10 @@ func (c *Client) Close() error {
 
 func (c *Client) URLForChange(change *ChangeInfo) string {
 	return c.makeURL(fmt.Sprintf("c/%s/+/%d", change.Project, change.Number), nil)
+}
+
+func (c *Client) DiffURLBetweenPatchSets(change *ChangeInfo, patchSetNum1, patchSetNum2 int) string {
+	return c.URLForChange(change) + fmt.Sprintf("/%d..%d", patchSetNum1, patchSetNum2)
 }
 
 func (c *Client) makeURL(path string, query url.Values) string {
@@ -135,7 +139,34 @@ func (c *Client) GetChangeEx(ctx context.Context, changeID string, opts *QueryCh
 	if labels := opts.assembleLabels(); len(labels) > 0 {
 		values["o"] = labels
 	}
-	resp, err := c.doGet(ctx, "/changes/"+changeID, values)
+	resp, err := c.doGet(ctx, "/changes/"+url.QueryEscape(changeID)+"/", values)
+	if err != nil {
+		return changeInfo, err
+	}
+	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
+
+	decoder := json.NewDecoder(resp.Body)
+	err = decoder.Decode(&changeInfo)
+	return changeInfo, err
+}
+
+func (c *Client) GetChangeReviewers(ctx context.Context, changeID string) ([]ReviewerInfo, error) {
+	resp, err := c.doGet(ctx, "/changes/"+url.QueryEscape(changeID)+"/reviewers/", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
+
+	decoder := json.NewDecoder(resp.Body)
+	var reviewers []ReviewerInfo
+	err = decoder.Decode(&reviewers)
+	return reviewers, err
+}
+
+func (c *Client) GetPatchSetInfo(ctx context.Context, changeID, patchSetID string) (changeInfo ChangeInfo, err error) {
+	queryPath := fmt.Sprintf("/changes/%s/revisions/%s/review",
+		url.QueryEscape(changeID), url.QueryEscape(patchSetID))
+	resp, err := c.doGet(ctx, queryPath, nil)
 	if err != nil {
 		return changeInfo, err
 	}

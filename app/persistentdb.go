@@ -171,7 +171,7 @@ func (ud *PersistentDB) IdentifyNewInlineComments(ctx context.Context, commentsB
 	}
 	alternatives := make([]string, 0, len(commentsByID))
 	queryArgs := make([]interface{}, 0, len(commentsByID))
-	for commentID, _ := range commentsByID {
+	for commentID := range commentsByID {
 		alternatives = append(alternatives, "comment_id = ?")
 		queryArgs = append(queryArgs, commentID)
 	}

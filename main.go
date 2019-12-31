@@ -16,9 +16,9 @@ import (
 )
 
 var (
-	gerritListenAddr = flag.String("gerrit-listen", ":29746", "Address to listen on for incoming Gerrit events")
-	gerritServerAddr = flag.String("gerrit-server", "https://gerrit-review.googlesource.com/", "Address of the Gerrit server to query about changes")
-	persistentDBSource      = flag.String("persistent-db", "sqlite:./persistent.db", "Data source for persistent DB")
+	gerritListenAddr   = flag.String("gerrit-listen", ":29746", "Address to listen on for incoming Gerrit events")
+	gerritServerAddr   = flag.String("gerrit-server", "https://gerrit-review.googlesource.com/", "Address of the Gerrit server to query about changes")
+	persistentDBSource = flag.String("persistent-db", "sqlite:./persistent.db", "Data source for persistent DB")
 )
 
 func main() {

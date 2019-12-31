@@ -7,8 +7,7 @@ func init() {
 }
 
 func wrapDBXErr(e *Error) error {
-	switch e.Code {
-	case ErrorCode_NoRows:
+	if e.Code == ErrorCode_NoRows {
 		return e.Err
 	}
 	return e
