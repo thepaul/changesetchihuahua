@@ -350,10 +350,7 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 	})
 	if err != nil {
 		a.logger.Error("could not query inline comments via API", zap.Error(err), zap.String("change-id", change.ID))
-		reviewerLink := a.prepareUserLink(ctx, &reviewer)
-		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer or CC for %s", changeLink))
-		a.generalNotify(ctx, fmt.Sprintf("%s was added as a reviewer or CC for %s", reviewerLink, changeLink))
-		return
+		// Things should still work below, with the empty changeInfo.ReviewerUpdates list.
 	}
 
 	// Identify the reviewer update closest to the time of our event that adds the specified
@@ -428,21 +425,23 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 	if err != nil {
 		a.logger.Error("could not fetch patchset info for change, so can not notify reviewers",
 			zap.Error(err), zap.String("change-id", change.ID))
-		a.generalNotify(ctx, fmt.Sprintf("%s created a new changeset %s.", uploaderLink, changeLink))
-		return
+		// changeInfo will be an empty gerrit.ChangeInfo record, which should work below,
+		// using REWORK as a default change type and with an empty reviewers map. Continue
+		// for the sake of the general notification.
 	}
+
 	var reviewerMsg, ccMsg, generalMsg string
 	if patchSet.Number == 1 {
 		// this is a whole new changeset. notify accordingly.
-		reviewerMsg = fmt.Sprintf("%s created a new changeset %s, with you as a reviewer.",
+		reviewerMsg = fmt.Sprintf("%s pushed a new changeset %s, with you as a reviewer.",
 			uploaderLink, changeLink)
-		ccMsg = fmt.Sprintf("%s created a new changeset %s, with you CC'd.",
+		ccMsg = fmt.Sprintf("%s pushed a new changeset %s, with you CC'd.",
 			uploaderLink, changeLink)
-		generalMsg = fmt.Sprintf("%s created a new changeset %s.",
+		generalMsg = fmt.Sprintf("%s pushed a new changeset %s.",
 			uploaderLink, changeLink)
 	} else {
 		changeType := "REWORK"
-		// this map should have exactly one entry, but we can't predict its key :/
+		// this map should have exactly one entry or zero entries, but we can't predict the key
 		for _, revisionInfo := range changeInfo.Revisions {
 			changeType = revisionInfo.Kind
 		}
@@ -454,7 +453,7 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 			reviewerMsg = fmt.Sprintf("%s created a new patchset #%d on change %s (no code changes)",
 				uploaderLink, patchSet.Number, changeLink)
 		default:
-			diffURL := a.gerritClient.DiffURLBetweenPatchSets(&changeInfo, patchSet.Number-1, patchSet.Number)
+			diffURL := diffURLBetweenPatchSets(&change, patchSet.Number-1, patchSet.Number)
 			reviewerMsg = fmt.Sprintf("%s uploaded a new patchset #%d on change %s (%s)",
 				uploaderLink, patchSet.Number, changeLink, a.chat.FormatLink(diffURL, "see changes"))
 		}
@@ -491,7 +490,7 @@ func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, cha
 	if abandoner.Username != change.Owner.Username {
 		a.notify(ctx, &change.Owner, msg)
 	}
-
+	a.generalNotify(ctx, msg)
 	a.notifyAllReviewers(ctx, change.ID, msg, []string{abandoner.Username, change.Owner.Username})
 }
 
@@ -501,7 +500,7 @@ func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change
 	if submitter.Username != change.Owner.Username {
 		a.notify(ctx, &change.Owner, msg)
 	}
-
+	a.generalNotify(ctx, msg)
 	a.notifyAllReviewers(ctx, change.ID, msg, []string{submitter.Username, change.Owner.Username})
 }
 
@@ -1092,6 +1091,10 @@ func (a *App) getAllChangesMatching(ctx context.Context, queryString string, opt
 		}
 	}
 	return changes, nil
+}
+
+func diffURLBetweenPatchSets(change *events.Change, patchSetNum1, patchSetNum2 int) string {
+	return change.URL + fmt.Sprintf("/%d..%d", patchSetNum1, patchSetNum2)
 }
 
 func accountFromAccountInfo(accountInfo *gerrit.AccountInfo) *events.Account {

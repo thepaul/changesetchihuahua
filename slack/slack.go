@@ -196,12 +196,16 @@ func (s *slackInterface) SendNotification(ctx context.Context, id, message strin
 	return s.PostMessage(ctx, chanID, message)
 }
 
-func (s *slackInterface) SendPersonalReport(ctx context.Context, chatID string, items []string) (app.MessageHandle, error) {
-	return s.SendNotification(ctx, chatID, strings.Join(items, "\n\n"))
+func (s *slackInterface) SendPersonalReport(ctx context.Context, chatID, title string, items []string) (app.MessageHandle, error) {
+	return s.SendNotification(ctx, chatID, fmt.Sprintf("*%s*\n%s", title, strings.Join(items, "\n\n")))
 }
 
-func (s *slackInterface) SendChannelReport(ctx context.Context, chatID string, items []string) (app.MessageHandle, error) {
-	return s.PostMessage(ctx, chatID, strings.Join(items, "\n\n"))
+func (s *slackInterface) SendChannelNotification(ctx context.Context, chanID, message string) (app.MessageHandle, error) {
+	return s.PostMessage(ctx, chanID, message)
+}
+
+func (s *slackInterface) SendChannelReport(ctx context.Context, chatID, title string, items []string) (app.MessageHandle, error) {
+	return s.PostMessage(ctx, chatID, fmt.Sprintf("*%s*\n\n%s", title, strings.Join(items, "\n\n")))
 }
 
 func (s *slackInterface) PostMessage(ctx context.Context, chanID, message string) (app.MessageHandle, error) {

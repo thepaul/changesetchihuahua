@@ -49,10 +49,6 @@ func (c *Client) URLForChange(change *ChangeInfo) string {
 	return c.makeURL(fmt.Sprintf("c/%s/+/%d", change.Project, change.Number), nil)
 }
 
-func (c *Client) DiffURLBetweenPatchSets(change *ChangeInfo, patchSetNum1, patchSetNum2 int) string {
-	return c.URLForChange(change) + fmt.Sprintf("/%d..%d", patchSetNum1, patchSetNum2)
-}
-
 func (c *Client) makeURL(path string, query url.Values) string {
 	myURL := *c.ServerURL // copy
 	myURL.Path += path
