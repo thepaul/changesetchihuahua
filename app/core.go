@@ -27,17 +27,26 @@ const (
 var (
 	admin = flag.String("admin", "", "Identity of an admin by email address. Will be contacted through the chat system, not email")
 
-	reportTimeHour = flag.Int("user-report-hour", 11, "Hour (in 24-hour time) in user's local time when review report should be sent, if they are online")
+	personalReportHour = flag.Int("user-report-hour", 11, "Earliest hour (in 24-hour time) in user's local time when review report should be sent, if they are online. If they are not online, the system will keep checking every hour during working hours.")
 
-	minIntervalBetweenReports = flag.Duration("min-interval-between-reports", time.Hour*8, "Minimum amount of time that must elapse before more personalized Gerrit reports are sent to a given user")
+	minIntervalBetweenReports = flag.Duration("min-interval-between-reports", time.Hour*10, "Minimum amount of time that must elapse before more personalized Gerrit reports are sent to a given user")
+
+	globalNotifyChannel = flag.String("global-notify-channel", "", "A channel to which all generally-applicable notifications should be sent")
+
+	globalReportChannel = flag.String("global-report-channel", "", "A channel to which a daily report will be sent to the global-notify-channel, noting what change sets have been waiting too long and who they're waiting for")
+
+	globalReportHour = flag.Int("global-report-hour", 15, "Hour (in 24-hour time) in UTC when the daily report will be sent to global-report-channel")
 
 	removeProjectPrefix = flag.String("remove-project-prefix", "", "A common prefix on project names which can be removed if present before displaying in links")
 
 	inlineCommentMaxAge = flag.Duration("inline-comment-max-age", time.Hour, "Inline comments older than this will not be reported, even if not found in the cache")
+
+	workNeededQuery = flag.String("work-needed-query", "is:open -is:wip -label:Code-Review=-2", "Gerrit query to use for determining change sets with work needed for the global report")
 )
 
 const (
 	gerritQueryPageSize = 100
+	globalReportMaxSize = 100
 
 	workingDayStartHour = 0  // 9
 	workingDayEndHour   = 24 // 17
@@ -49,8 +58,12 @@ type ChatSystem interface {
 	SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string))
 	GetInfoByID(ctx context.Context, chatID string) (ChatUser, error)
 	LookupUserByEmail(ctx context.Context, email string) (string, error)
+	LookupChannelByName(ctx context.Context, name string) (string, error)
 	SendToUserByID(ctx context.Context, id, message string) (MessageHandle, error)
+	SendToChannelByID(ctx context.Context, chanID, message string) (MessageHandle, error)
 
+	FormatBold(msg string) string
+	FormatItalic(msg string) string
 	FormatChangeLink(project string, number int, url, subject string) string
 	FormatUserLink(chatID string) string
 	FormatLink(url, text string) string
@@ -71,16 +84,18 @@ type App struct {
 
 	reporterLock sync.Mutex
 
-	adminChatID     string
-	adminLookupOnce sync.Once
+	adminChatID           string
+	notifyChannelID       string
+	globalReportChannelID string
+	lookupOnce            sync.Once
 }
 
 func New(logger *zap.Logger, chat ChatSystem, persistentDB *PersistentDB, gerritClient *gerrit.Client) *App {
 	app := &App{
-		logger:       logger,
-		chat:         chat,
-		persistentDB: persistentDB,
-		gerritClient: gerritClient,
+		logger:        logger,
+		chat:          chat,
+		persistentDB:  persistentDB,
+		gerritClient:  gerritClient,
 	}
 	startMsg := fmt.Sprintf("changeset-chihuahua version %s starting up", Version)
 	chat.SetIncomingMessageCallback(app.IncomingChatCommand)
@@ -118,7 +133,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 	ctx, cancel := context.WithTimeout(context.Background(), chatCommandHandlingTimeout)
 	defer cancel()
 
-	adminChatID := a.getAdminID(ctx)
+	adminChatID := a.getAdminID()
 	if userID != adminChatID {
 		return
 	}
@@ -127,8 +142,16 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 	}
 
 	if text == "!personal-reports" {
-		logger.Info("admin requested personal review reports")
-		a.ReportWaitingChangeSets(ctx, time.Now())
+		logger.Info("admin requested unscheduled personal review reports")
+		a.PersonalReports(ctx, time.Now())
+	} else if text == "!global-report" {
+		logger.Info("admin requested unscheduled global report")
+		chanID := a.getReportChannelID()
+		if chanID == "" {
+			reply("No global report channel configured.")
+			return
+		}
+		a.GlobalReport(ctx, time.Now(), chanID)
 	} else if strings.HasPrefix(text, "!assoc ") {
 		parts := strings.Split(text, " ")
 		gerritUsername := ""
@@ -447,7 +470,7 @@ func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change
 	a.notifyAllReviewers(ctx, change.ID, msg, []string{submitter.Username, change.Owner.Username})
 }
 
-func (a *App) AssigneeChanged(ctx context.Context, changer events.Account, change events.Change, oldAssignee events.Account) {
+func (a *App) AssigneeChanged(_ context.Context, _ events.Account, _ events.Change, _ events.Account) {
 	// We don't use the Assignee field for anything right now, I think. Probably good to ignore this
 }
 
@@ -488,20 +511,63 @@ func (a *App) notify(ctx context.Context, gerritUser *events.Account, message st
 	}
 }
 
-func (a *App) getAdminID(ctx context.Context) string {
-	a.adminLookupOnce.Do(func() {
-		chatID, err := a.chat.LookupUserByEmail(ctx, *admin)
-		if err != nil {
-			a.logger.Error("could not look up admin in chat system", zap.String("admin-email", *admin), zap.Error(err))
-			return
+const startLookupsTimeout = 10 * time.Minute
+
+func (a *App) doStartTimeLookups() {
+	a.lookupOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), startLookupsTimeout)
+		defer cancel()
+
+		var wg waitGroup
+		wg.Go(func() {
+			chatID, err := a.chat.LookupUserByEmail(ctx, *admin)
+			if err != nil {
+				a.logger.Error("could not look up admin in chat system", zap.String("admin-email", *admin), zap.Error(err))
+			} else {
+				a.adminChatID = chatID
+			}
+		})
+		if *globalNotifyChannel != "" {
+			wg.Go(func() {
+				chanID, err := a.chat.LookupChannelByName(ctx, *globalNotifyChannel)
+				if err != nil {
+					a.logger.Error("could not look up notify channel in chat system", zap.String("channel-name", *globalNotifyChannel), zap.Error(err))
+				} else {
+					a.notifyChannelID = chanID
+				}
+			})
 		}
-		a.adminChatID = chatID
+		if *globalReportChannel != "" {
+			wg.Go(func() {
+				chanID, err := a.chat.LookupChannelByName(ctx, *globalReportChannel)
+				if err != nil {
+					a.logger.Error("could not look up global report channel in chat system", zap.String("channel-name", *globalReportChannel), zap.Error(err))
+				} else {
+					a.globalReportChannelID = chanID
+				}
+			})
+		}
+		wg.Wait()
 	})
+}
+
+func (a *App) getAdminID() string {
+	a.doStartTimeLookups()
 	return a.adminChatID
 }
 
+func (a *App) getNotifyChannelID() string {
+	a.doStartTimeLookups()
+	return a.notifyChannelID
+}
+
+func (a *App) getReportChannelID() string {
+	a.doStartTimeLookups()
+	return a.globalReportChannelID
+}
+
 func (a *App) SendToAdmin(ctx context.Context, message string) {
-	adminChatID := a.getAdminID(ctx)
+	adminChatID := a.getAdminID()
 	if adminChatID == "" {
 		a.logger.Error("not sending message to admin; no admin configured", zap.String("message", message))
 		return
@@ -529,7 +595,7 @@ func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string
 	// fall back to checking for the same email address in the chat system
 	chatID, err = a.chat.LookupUserByEmail(ctx, user.Email)
 	if err != nil {
-		a.logger.Warn("user not found in chat system",
+		a.logger.Info("user not found in chat system",
 			zap.String("gerrit-username", user.Username),
 			zap.String("gerrit-email", user.Email),
 			zap.Error(err))
@@ -546,7 +612,37 @@ func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string
 	return chatID
 }
 
-func (a *App) PeriodicReportWaitingChangeSets(ctx context.Context, getTime func() time.Time) error {
+func (a *App) PeriodicGlobalReport(ctx context.Context, getTime func() time.Time) error {
+	chanID := a.getReportChannelID()
+	if chanID == "" {
+		// no global report configured
+		return nil
+	}
+	timer := time.NewTimer(a.nextGlobalReportTime(getTime()))
+
+	for {
+		select {
+		case t := <-timer.C:
+			a.GlobalReport(ctx, t, chanID)
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		}
+		timer.Reset(a.nextGlobalReportTime(getTime()))
+	}
+}
+
+func (a *App) nextGlobalReportTime(now time.Time) time.Duration {
+	nextReport := time.Date(now.Year(), now.Month(), now.Day(), *globalReportHour, 0, 0, 0, time.UTC)
+	if now.After(nextReport) {
+		nextReport = time.Date(now.Year(), now.Month(), now.Day()+1, *globalReportHour, 0, 0, 0, time.UTC)
+	}
+	return nextReport.Sub(now)
+}
+
+func (a *App) PeriodicPersonalReports(ctx context.Context, getTime func() time.Time) error {
 	// this is similar to time.Ticker, but should always run close to the top of the UTC hour.
 	now := getTime()
 	timer := time.NewTimer(now.UTC().Truncate(time.Hour).Add(time.Hour).Sub(now))
@@ -554,7 +650,7 @@ func (a *App) PeriodicReportWaitingChangeSets(ctx context.Context, getTime func(
 	for {
 		select {
 		case t := <-timer.C:
-			a.ReportWaitingChangeSets(ctx, t)
+			a.PersonalReports(ctx, t)
 		case <-ctx.Done():
 			if !timer.Stop() {
 				<-timer.C
@@ -567,15 +663,159 @@ func (a *App) PeriodicReportWaitingChangeSets(ctx context.Context, getTime func(
 	}
 }
 
-func (a *App) ReportWaitingChangeSets(ctx context.Context, t time.Time) {
-	// a big dumb hammer to keep multiple calls to this from stepping on each other.
-	// this is necessary since we allow calls from places other than
-	// PeriodicReportWaitingChangeSets() for debugging reasons.
+func (a *App) GlobalReport(ctx context.Context, t time.Time, chanID string) {
+	defer func() {
+		rec := recover()
+		if rec != nil {
+			a.logger.Error("panic creating global report", zap.Any("panic-message", rec))
+		}
+	}()
+
+	logger := a.logger.With(zap.Time("global-report-start", t), zap.String("channel-id", chanID))
+	logger.Debug("initiating global current changeset report")
+
+	changes, more, err := a.gerritClient.QueryChangesEx(ctx, []string{*workNeededQuery}, &gerrit.QueryChangesOpts{
+		Limit:                    globalReportMaxSize,
+		DescribeLabels:           true,
+		DescribeDetailedLabels:   true,
+		DescribeCurrentRevision:  true,
+		DescribeDetailedAccounts: true,
+		DescribeMessages:         true,
+		DescribeSubmittable:      true,
+		DescribeWebLinks:         true,
+		DescribeCheck:            true,
+	})
+	if err != nil {
+		logger.Error("failed to query changesets needing attention from Gerrit", zap.Error(err))
+		return
+	}
+	logger.Debug("global report processing change info", zap.Int("num-changes", len(changes)))
+
+	var messages []string
+	changeLoop:
+	for _, change := range changes {
+		// note all users that have voted on this patchset
+		usersWithVotes := map[string]struct{}{}
+		didntVoteMax := map[string]struct{}{}
+		for _, labelInfo := range change.Labels {
+			if labelInfo.Optional {
+				// voting on an optional label doesn't relieve you of duty
+				continue
+			}
+			for _, vote := range labelInfo.All {
+				if vote.Value != nil && *vote.Value > 0 {
+					usersWithVotes[vote.Username] = struct{}{}
+					if *vote.Value < vote.PermittedVotingRange.Max {
+						didntVoteMax[vote.Username] = struct{}{}
+					}
+				}
+			}
+		}
+
+		// note all users that have commented on this patchset
+		usersWithComments := map[string]struct{}{}
+		if currentRevision, ok := change.Revisions[change.CurrentRevision]; ok {
+			for _, message := range change.Messages {
+				if message.RevisionNumber < int(currentRevision.Number) {
+					// only paying attention to comments on this patchset right now
+					continue
+				}
+				if strings.HasPrefix(message.Tag, "autogenerated:") {
+					// don't count autogenerated comments like "Uploaded patch set X."
+					// or "Build Started"
+					continue
+				}
+				usersWithComments[message.Author.Username] = struct{}{}
+			}
+		}
+
+		var waitingMsg string
+		if change.Submittable {
+			// change is already submittable, so we'll just note that
+			waitingMsg = a.chat.FormatBold("submittable")
+		} else {
+			// determine which reviewers are being waited on (reviewers who haven't
+			// voted or commented)
+			var waitingOn []string
+			for _, reviewer := range change.Reviewers["REVIEWER"] {
+				if reviewer.Username == change.Owner.Username {
+					continue
+				}
+				if _, ok := usersWithVotes[reviewer.Username]; ok {
+					// reviewer has issued a vote on this patchset; not waiting on them
+					continue
+				}
+				if _, ok := usersWithComments[reviewer.Username]; ok {
+					// reviewer has commented on this patchset; not waiting on them
+					continue
+				}
+				waitingOn = append(waitingOn, a.prepareUserLink(ctx, accountFromAccountInfo(&reviewer)))
+			}
+			if len(waitingOn) == 0 {
+				// Not waiting on any reviewers. Need to determine whether this is
+				// because there aren't enough reviewers or because they want more
+				// changes to be made. Since we can't easily tell how many votes
+				// gerrit wants (why doesn't the change.Requirements ever seem to
+				// get populated?) for now, the rule will be: if all the reviewers
+				// voted the maximum but the change is still not submittable, then
+				// more reviewers are needed. Otherwise, let the owner deal with
+				// it.
+				if len(didntVoteMax) == 0 {
+					waitingMsg = "needs more reviewers"
+				} else {
+					continue changeLoop
+				}
+			} else {
+				waitingMsg = "Waiting on " + strings.Join(waitingOn, ", ")
+			}
+		}
+
+		// don't make a user link for the owner, so they don't get tagged unnecessarily
+		ownerName := a.chat.FormatItalic("(" + change.Owner.Name + ")")
+
+		var staleness string
+		staleTime := t.Sub(gerrit.ParseTimestamp(change.Updated))
+		if staleTime < (time.Hour * 24) {
+			staleness = "fresh"
+		} else {
+			staleness = prettyTimeDelta(staleTime) + " stale"
+		}
+
+		var age string
+		sinceCreated := t.Sub(gerrit.ParseTimestamp(change.Created))
+		if sinceCreated < time.Minute {
+			age = "newly created"
+		} else {
+			age = prettyTimeDelta(sinceCreated) + " old"
+		}
+
+		messages = append(messages, fmt.Sprintf("%s %s\n%s · %s · %s",
+			a.formatChangeInfoLink(&change),
+			ownerName,
+			a.chat.FormatItalic(staleness),
+			a.chat.FormatItalic(age),
+			waitingMsg))
+	}
+	if more {
+		messages = append(messages, a.chat.FormatItalic("More change sets awaiting action exist. List is too long!"))
+	}
+
+	logger.Debug("global report complete", zap.Int("num-messages", len(messages)))
+	totalMessage := a.chat.FormatBold("Waiting for review") + "\n\n" + strings.Join(messages, "\n\n")
+	if _, err := a.chat.SendToChannelByID(ctx, chanID, totalMessage); err != nil {
+		logger.Error("failed to send global message report", zap.Error(err))
+	}
+}
+
+func (a *App) PersonalReports(ctx context.Context, t time.Time) {
+	// a big dumb hammer to keep multiple calls to this from stepping on each other. this is
+	// necessary since we allow calls from places other than PeriodicPersonalReports() for
+	// debugging reasons.
 	a.reporterLock.Lock()
 	defer a.reporterLock.Unlock()
 
-	logger := a.logger.With(zap.Time("report-start", t))
-	logger.Debug("initiating current changeset reports")
+	logger := a.logger.With(zap.Time("personal-reports-start", t))
+	logger.Debug("initiating personal current changeset reports")
 
 	// get all accounts gerrit knows about
 	accounts, _, err := a.gerritClient.QueryAccountsEx(ctx, "is:active",
@@ -590,20 +830,19 @@ func (a *App) ReportWaitingChangeSets(ctx context.Context, t time.Time) {
 	cutOffTime := t.Add(-*minIntervalBetweenReports)
 
 	for _, acct := range accounts {
-		a.ReportWaitingChangeSetsToUser(ctx, logger, t, cutOffTime, &acct)
+		a.PersonalReportToUser(ctx, logger, t, cutOffTime, &acct)
 	}
 }
 
-// ReportWaitingChangeSetsToUser looks up information on the given user, and if it is an
-// appropriate time, sends them a report on the changesets currently waiting for their
-// review.
+// PersonalReportToUser looks up information on the given user, and if it is an appropriate
+// time, sends them a report on the changesets currently waiting for their review.
 //
 // Note this is pretty inefficient with respect to execution time and data transferred.
 // Since I don't expect this to be dealing with very large amounts of data, and performance
 // is very non-critical here, I would rather let it be a little slow as a simplistic way of
 // keeping down the load on the chat and Gerrit servers. If this needs to be snappier,
 // though, this is probably a good place to start parallelizing.
-func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Logger, now, cutOffTime time.Time, acct *gerrit.AccountInfo) {
+func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now, cutOffTime time.Time, acct *gerrit.AccountInfo) {
 	logger = logger.With(
 		zap.String("gerrit-username", acct.Username),
 		zap.String("gerrit-email", acct.Email),
@@ -669,7 +908,7 @@ func (a *App) ReportWaitingChangeSetsToUser(ctx context.Context, logger *zap.Log
 	}
 
 	// build the report
-	reportItems := []string{"*Reviews assigned to you*"}
+	reportItems := []string{a.chat.FormatBold("Reviews assigned to you")}
 	for _, ch := range changes {
 		createdOn := gerrit.ParseTimestamp(ch.Created)
 		lastUpdated := gerrit.ParseTimestamp(ch.Updated)
@@ -708,8 +947,11 @@ func (a *App) formatUserLink(account *events.Account, chatID string) string {
 	if chatID != "" {
 		return a.chat.FormatUserLink(chatID)
 	}
-	// if we don't have a chat ID for them, just return the gerrit account description
-	return account.String()
+	// if we don't have a chat ID for them, do our best from the Gerrit account info
+	if account.Name != "" {
+		return account.Name
+	}
+	return account.Username
 }
 
 func (a *App) formatSourceLink(changeURL string, patchSet int, commentInfo *gerrit.CommentInfo) string {
@@ -731,19 +973,23 @@ func (a *App) formatSourceLink(changeURL string, patchSet int, commentInfo *gerr
 
 func prettyDate(now, then time.Time) string {
 	delta := now.Sub(then)
-	var timeUnits string
-	var plural string
-	var unitDuration time.Duration
-	deltaDescriptor := "ago"
+	deltaDescriptor := " ago"
 
 	if delta < 0 {
-		deltaDescriptor = "from now"
+		deltaDescriptor = " from now"
 		delta = -delta
 	}
 	if delta < time.Second {
 		// no sub-second precision here
 		return "now"
 	}
+	return prettyTimeDelta(delta) + deltaDescriptor
+}
+
+func prettyTimeDelta(delta time.Duration) string {
+	var timeUnits string
+	var plural string
+	var unitDuration time.Duration
 	switch {
 	case delta < time.Minute:
 		timeUnits = "second"
@@ -762,12 +1008,12 @@ func prettyDate(now, then time.Time) string {
 	if count != 1 {
 		plural = "s"
 	}
-	return fmt.Sprintf("%d %s%s %s", count, timeUnits, plural, deltaDescriptor)
+	return fmt.Sprintf("%d %s%s", count, timeUnits, plural)
 }
 
 func (a *App) isGoodTimeForReport(_ *gerrit.AccountInfo, _ ChatUser, t time.Time) bool {
 	hour := t.Hour()
-	return hour >= *reportTimeHour && hour >= workingDayStartHour && hour < workingDayEndHour
+	return hour >= *personalReportHour && hour >= workingDayStartHour && hour < workingDayEndHour
 }
 
 func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername string) ([]gerrit.ChangeInfo, error) {
@@ -780,7 +1026,7 @@ func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername string) (
 	})
 }
 
-// See https://review.dev.storj.io/Documentation/user-search.html for the various
+// See https://gerrit-review.googlesource.com/Documentation/user-search.html for the various
 // query operators.
 func (a *App) getAllChangesMatching(ctx context.Context, queryString string, opts *gerrit.QueryChangesOpts) (changes []gerrit.ChangeInfo, err error) {
 	for {

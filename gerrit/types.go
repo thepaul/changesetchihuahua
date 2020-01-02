@@ -68,7 +68,7 @@ type LabelInfo struct {
 	Blocking bool
 	// Value is the voting value of the user who recommended/disliked this label on the change
 	// if it is not "+1"/"-1".
-	Value string
+	Value int
 	// DefaultValue is the default voting value for the label. This value may be outside the
 	// range specified in PermittedLabels.
 	DefaultValue string

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nlopes/slack"
 	"github.com/nlopes/slack/slackutilsx"
+	"github.com/zeebo/errs"
 	"go.uber.org/zap"
 
 	"github.com/jtolds/changesetchihuahua/app"
@@ -184,11 +185,38 @@ func (s *slackInterface) SendToUserByID(ctx context.Context, id, message string)
 	if err != nil {
 		return nil, err
 	}
+	return s.SendToChannelByID(ctx, chanID, message)
+}
+
+func (s *slackInterface) SendToChannelByID(ctx context.Context, chanID, message string) (app.MessageHandle, error) {
 	ch, tm, err := s.api.PostMessageContext(ctx, chanID, slack.MsgOptionText(message, false))
 	if err != nil {
 		return nil, err
 	}
 	return &MessageHandle{Channel: ch, Timestamp: tm}, nil
+}
+
+func (s *slackInterface) LookupChannelByName(ctx context.Context, channelName string) (string, error) {
+	channelName = strings.TrimLeft(channelName, "#")
+	cursor := ""
+	for {
+		conversationsPage, more, err := s.rtm.GetConversationsForUserContext(ctx, &slack.GetConversationsForUserParameters{
+			Cursor:          cursor,
+			ExcludeArchived: true,
+		})
+		if err != nil {
+			return "", err
+		}
+		for _, conversation := range conversationsPage {
+			if conversation.Name == channelName || conversation.NameNormalized == channelName {
+				return conversation.ID, nil
+			}
+		}
+		if more == "" {
+			return "", errs.New("channel %q not found", channelName)
+		}
+		cursor = more
+	}
 }
 
 func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (string, error) {
@@ -212,6 +240,14 @@ func (s *slackInterface) GetInfoByID(ctx context.Context, chatID string) (app.Ch
 		return nil, err
 	}
 	return &slackUser{info: user, presence: presence}, nil
+}
+
+func (s *slackInterface) FormatBold(msg string) string {
+	return "*" + msg + "*"
+}
+
+func (s *slackInterface) FormatItalic(msg string) string {
+	return "_" + msg + "_"
 }
 
 func (s *slackInterface) FormatChangeLink(project string, number int, url, subject string) string {

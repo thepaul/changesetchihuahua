@@ -62,7 +62,10 @@ func main() {
 		return srv.ListenAndServe()
 	})
 	group.Go(func() error {
-		return chihuahua.PeriodicReportWaitingChangeSets(ctx, time.Now)
+		return chihuahua.PeriodicPersonalReports(ctx, time.Now)
+	})
+	group.Go(func() error {
+		return chihuahua.PeriodicGlobalReport(ctx, time.Now)
 	})
 
 	if err := group.Wait(); err != nil {
