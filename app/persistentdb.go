@@ -186,16 +186,13 @@ func (ud *PersistentDB) IdentifyNewInlineComments(ctx context.Context, commentsB
 	}
 	defer func() { err = errs.Combine(err, rows.Close()) }()
 
-	ud.logger.Sugar().Debugf("%d elements in commentsByID to start with", len(commentsByID))
 	for rows.Next() {
 		var foundCommentID string
 		if err := rows.Scan(&foundCommentID); err != nil {
 			return err
 		}
-		ud.logger.Sugar().Debugf("%s is not a new comment id", foundCommentID)
 		delete(commentsByID, foundCommentID)
 	}
-	ud.logger.Sugar().Debugf("%d elements in commentsByID now", len(commentsByID))
 
 	if len(commentsByID) > 0 {
 		values := make([]string, 0, len(commentsByID))

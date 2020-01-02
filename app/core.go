@@ -78,7 +78,7 @@ type ChatSystem interface {
 // MessageHandle represents a sent message. Some chat systems support editing and deletion of
 // sent messages, and we may take advantage of that at some point (but this is mostly ignored for
 // now).
-type MessageHandle interface{
+type MessageHandle interface {
 	SentTime() time.Time
 }
 
@@ -106,10 +106,10 @@ type App struct {
 
 func New(logger *zap.Logger, chat ChatSystem, persistentDB *PersistentDB, gerritClient *gerrit.Client) *App {
 	app := &App{
-		logger:        logger,
-		chat:          chat,
-		persistentDB:  persistentDB,
-		gerritClient:  gerritClient,
+		logger:       logger,
+		chat:         chat,
+		persistentDB: persistentDB,
+		gerritClient: gerritClient,
 	}
 	startMsg := fmt.Sprintf("changeset-chihuahua version %s starting up", Version)
 	chat.SetIncomingMessageCallback(app.IncomingChatCommand)
@@ -158,6 +158,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 	if text == "!personal-reports" {
 		logger.Info("admin requested unscheduled personal review reports")
 		a.PersonalReports(ctx, time.Now())
+		return "Ok"
 	} else if text == "!global-report" {
 		logger.Info("admin requested unscheduled global report")
 		chanID := a.getReportChannelID()
@@ -165,6 +166,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 			return "No global report channel configured."
 		}
 		a.GlobalReport(ctx, time.Now(), chanID)
+		return "Ok"
 	} else if strings.HasPrefix(text, "!assoc ") {
 		parts := strings.Split(text, " ")
 		gerritUsername := ""
@@ -181,10 +183,9 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 		if err := a.persistentDB.AssociateChatIDWithGerritUser(ctx, gerritUsername, chatID); err != nil {
 			logger.Error("failed to create manual association", zap.Error(err))
 			return "failed to create association"
-		} else {
-			logger.Info("admin created manual association")
-			return fmt.Sprintf("ok, %s = %s", gerritUsername, a.chat.FormatUserLink(chatID))
 		}
+		logger.Info("admin created manual association")
+		return fmt.Sprintf("ok, %s = %s", gerritUsername, a.chat.FormatUserLink(chatID))
 	}
 	return "I don't understand that command."
 }
@@ -335,6 +336,16 @@ func sortInlineComments(allComments map[string]*gerrit.CommentInfo, newComments 
 	}
 	sort.Sort(byPathLineAndTime(sliceToSort))
 	return sliceToSort
+}
+
+type byLastUpdateTime []gerrit.ChangeInfo
+
+func (b byLastUpdateTime) Len() int      { return len(b) }
+func (b byLastUpdateTime) Swap(i, j int) { b[i], b[j] = b[j], b[i] }
+func (b byLastUpdateTime) Less(i, j int) bool {
+	// these timestamps are strings, but they are rfc-3339 timestamps and are thus
+	// sortable without parsing.
+	return b[i].Updated < b[j].Updated
 }
 
 // ReviewerAdded is called when we receive a Gerrit reviewer-added event.
@@ -741,9 +752,10 @@ func (a *App) GlobalReport(ctx context.Context, t time.Time, chanID string) {
 		return
 	}
 	logger.Debug("global report processing change info", zap.Int("num-changes", len(changes)))
+	sort.Sort(byLastUpdateTime(changes))
 
 	var messages []string
-	changeLoop:
+changeLoop:
 	for _, change := range changes {
 		// note all users that have voted on this patchset
 		usersWithVotes := map[string]struct{}{}
@@ -893,6 +905,13 @@ func (a *App) PersonalReports(ctx context.Context, t time.Time) {
 // keeping down the load on the chat and Gerrit servers. If this needs to be snappier,
 // though, this is probably a good place to start parallelizing.
 func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now, cutOffTime time.Time, acct *gerrit.AccountInfo) {
+	defer func() {
+		rec := recover()
+		if rec != nil {
+			a.logger.Error("panic creating personal report", zap.String("gerrit-username", acct.Username), zap.Any("panic-message", rec))
+		}
+	}()
+
 	logger = logger.With(
 		zap.String("gerrit-username", acct.Username),
 		zap.String("gerrit-email", acct.Email),

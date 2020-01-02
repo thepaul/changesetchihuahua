@@ -285,7 +285,7 @@ func (s *slackInterface) FormatItalic(msg string) string {
 }
 
 func (s *slackInterface) FormatChangeLink(project string, number int, url, subject string) string {
-	return fmt.Sprintf("[%s#%d] %s", escapeText(project), number, s.FormatLink(url, subject))
+	return fmt.Sprintf("[%s@%d] %s", escapeText(project), number, s.FormatLink(url, subject))
 }
 
 func (s *slackInterface) FormatUserLink(chatID string) string {
