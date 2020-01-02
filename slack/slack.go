@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/nlopes/slack/slackutilsx"
 	"github.com/zeebo/errs"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/jtolds/changesetchihuahua/app"
 )
@@ -31,7 +33,7 @@ type slackInterface struct {
 	bot  slack.UserDetails
 	team slack.Team
 
-	incomingMessageCallback func(userID, chanID string, isDM bool, text string)
+	incomingMessageCallback func(userID, chanID string, isDM bool, text string) string
 }
 
 type logWrapper struct {
@@ -71,7 +73,7 @@ func NewSlackInterface(logger *zap.Logger) (EventedChatSystem, error) {
 	}, nil
 }
 
-func (s *slackInterface) SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string)) {
+func (s *slackInterface) SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string) string) {
 	s.incomingMessageCallback = cb
 }
 
@@ -154,7 +156,13 @@ func (s *slackInterface) handleMessage(ctx context.Context, eventData *slack.Mes
 	s.logger.Debug("received message", zap.Any("message", *eventData))
 
 	if s.incomingMessageCallback != nil {
-		s.incomingMessageCallback(eventData.User, eventData.Channel, strings.HasPrefix(eventData.Channel, "D"), eventData.Text)
+		reply := s.incomingMessageCallback(eventData.User, eventData.Channel, strings.HasPrefix(eventData.Channel, "D"), eventData.Text)
+		if reply != "" {
+			_, err := s.PostMessage(ctx, eventData.Channel, reply)
+			if err != nil {
+				s.logger.Debug("failed to send response to message", zap.Error(err), zap.String("response", reply), zap.Any("message", *eventData))
+			}
+		}
 	}
 	return nil
 }
@@ -179,16 +187,24 @@ func (s *slackInterface) handleUnmarshallingError(ctx context.Context, eventData
 	return nil
 }
 
-func (s *slackInterface) SendToUserByID(ctx context.Context, id, message string) (app.MessageHandle, error) {
+func (s *slackInterface) SendNotification(ctx context.Context, id, message string) (app.MessageHandle, error) {
 	// TODO: can the IM channel be cached? is it expected to remain valid as long as the userid?
 	_, _, chanID, err := s.rtm.OpenIMChannelContext(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return s.SendToChannelByID(ctx, chanID, message)
+	return s.PostMessage(ctx, chanID, message)
 }
 
-func (s *slackInterface) SendToChannelByID(ctx context.Context, chanID, message string) (app.MessageHandle, error) {
+func (s *slackInterface) SendPersonalReport(ctx context.Context, chatID string, items []string) (app.MessageHandle, error) {
+	return s.SendNotification(ctx, chatID, strings.Join(items, "\n\n"))
+}
+
+func (s *slackInterface) SendChannelReport(ctx context.Context, chatID string, items []string) (app.MessageHandle, error) {
+	return s.PostMessage(ctx, chatID, strings.Join(items, "\n\n"))
+}
+
+func (s *slackInterface) PostMessage(ctx context.Context, chanID, message string) (app.MessageHandle, error) {
 	ch, tm, err := s.api.PostMessageContext(ctx, chanID, slack.MsgOptionText(message, false))
 	if err != nil {
 		return nil, err
@@ -219,27 +235,41 @@ func (s *slackInterface) LookupChannelByName(ctx context.Context, channelName st
 	}
 }
 
-func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (string, error) {
+func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (app.ChatUser, error) {
 	user, err := s.rtm.GetUserByEmailContext(ctx, email)
-	if err != nil {
-		return "", err
-	}
-	return user.ID, nil
-}
-
-func (s *slackInterface) GetInfoByID(ctx context.Context, chatID string) (app.ChatUser, error) {
-	user, err := s.rtm.GetUserInfoContext(ctx, chatID)
 	if err != nil {
 		return nil, err
 	}
-	// TODO: can this use rtm.GetUserPresenceContext instead? Docs suggest that that one is
-	// rate-limited, and there isn't any mention of rate limiting on this web-API version,
-	// so maybe this is the easiest way to avoid any headaches.
-	presence, err := s.api.GetUserPresenceContext(ctx, chatID)
+	presence, err := s.GetUserPresence(ctx, user.ID)
 	if err != nil {
 		return nil, err
 	}
 	return &slackUser{info: user, presence: presence}, nil
+}
+
+func (s *slackInterface) GetUserInfoByID(ctx context.Context, chatID string) (app.ChatUser, error) {
+	var eg errgroup.Group
+	var user *slack.User
+	var presence *slack.UserPresence
+	eg.Go(func() (err error) {
+		user, err = s.rtm.GetUserInfoContext(ctx, chatID)
+		return err
+	})
+	eg.Go(func() (err error) {
+		presence, err = s.GetUserPresence(ctx, chatID)
+		return err
+	})
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+	return &slackUser{info: user, presence: presence}, nil
+}
+
+func (s *slackInterface) GetUserPresence(ctx context.Context, chatID string) (*slack.UserPresence, error) {
+	// TODO: can this use rtm.GetUserPresenceContext instead? Docs suggest that that one is
+	// rate-limited, and there isn't any mention of rate limiting on this web-API version,
+	// so maybe this is the easiest way to avoid any headaches.
+	return s.api.GetUserPresenceContext(ctx, chatID)
 }
 
 func (s *slackInterface) FormatBold(msg string) string {
@@ -280,9 +310,26 @@ type MessageHandle struct {
 	Timestamp string
 }
 
+func (mh *MessageHandle) SentTime() time.Time {
+	parts := strings.SplitN(mh.Timestamp, ".", 2)
+	sec, _ := strconv.ParseInt(parts[0], 10, 64)
+	nano := int64(0)
+	if len(parts) > 1 {
+		for len(parts[1]) < 9 { // haha this is dumb
+			parts[1] += "0"
+		}
+		nano, _ = strconv.ParseInt(parts[1][:9], 10, 64)
+	}
+	return time.Unix(sec, nano)
+}
+
 type slackUser struct {
 	info     *slack.User
 	presence *slack.UserPresence
+}
+
+func (u *slackUser) ChatID() string {
+	return u.info.ID
 }
 
 func (u *slackUser) RealName() string {
@@ -293,6 +340,6 @@ func (u *slackUser) IsOnline() bool {
 	return u.presence.Presence == "active"
 }
 
-func (u *slackUser) TimeLocation() *time.Location {
+func (u *slackUser) Timezone() *time.Location {
 	return time.FixedZone(fmt.Sprintf("offset%d", u.info.TZOffset), u.info.TZOffset)
 }

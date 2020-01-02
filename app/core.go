@@ -52,15 +52,20 @@ const (
 	workingDayEndHour   = 24 // 17
 )
 
-type MessageHandle interface{}
-
+// ChatSystem abstracts interaction with an instant-message chat system, so that this doesn't
+// become dependent on Slack specifically. I believe this interface ought to work for Hipchat
+// and IRC, but I'm not familiar with the APIs of many other multi-user chat networks.
 type ChatSystem interface {
-	SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string))
-	GetInfoByID(ctx context.Context, chatID string) (ChatUser, error)
-	LookupUserByEmail(ctx context.Context, email string) (string, error)
+	SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string) string)
+
+	GetUserInfoByID(ctx context.Context, chatID string) (ChatUser, error)
+	LookupUserByEmail(ctx context.Context, email string) (ChatUser, error)
 	LookupChannelByName(ctx context.Context, name string) (string, error)
-	SendToUserByID(ctx context.Context, id, message string) (MessageHandle, error)
-	SendToChannelByID(ctx context.Context, chanID, message string) (MessageHandle, error)
+
+	SendNotification(ctx context.Context, chatID, message string) (MessageHandle, error)
+	SendPersonalReport(ctx context.Context, chatID, title string, reportItems []string) (MessageHandle, error)
+	SendChannelNotification(ctx context.Context, chanID, message string) (MessageHandle, error)
+	SendChannelReport(ctx context.Context, chanID, title string, reportItems []string) (MessageHandle, error)
 
 	FormatBold(msg string) string
 	FormatItalic(msg string) string
@@ -70,10 +75,19 @@ type ChatSystem interface {
 	UnwrapUserLink(userLink string) string
 }
 
+// MessageHandle represents a sent message. Some chat systems support editing and deletion of
+// sent messages, and we may take advantage of that at some point (but this is mostly ignored for
+// now).
+type MessageHandle interface{
+	SentTime() time.Time
+}
+
+// ChatUser represents profile and presence information about a user on ChatSytem.
 type ChatUser interface {
+	ChatID() string
 	RealName() string
 	IsOnline() bool
-	TimeLocation() *time.Location
+	Timezone() *time.Location
 }
 
 type App struct {
@@ -121,12 +135,15 @@ func (w *waitGroup) Wait() {
 
 const chatCommandHandlingTimeout = time.Minute * 10
 
-func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string) {
+// IncomingChatCommand gets called by the ChatSystem when the bot sees a chat message. This might
+// be a message in a channel that the bot is in, or it might be a direct message (isDM). If this
+// returns a non-empty string, it will be sent to the original channel (or DM session) as a reply.
+func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string) (reply string) {
 	if !isDM {
-		return
+		return ""
 	}
 	if !strings.HasPrefix(text, "!") {
-		return // only pay attention to !-prefixed messages, for now
+		return "" // only pay attention to !-prefixed messages, for now
 	}
 	logger := a.logger.With(zap.String("user-id", userID), zap.String("chan-id", chanID), zap.String("text", text))
 	logger.Debug("got chat command")
@@ -135,10 +152,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 
 	adminChatID := a.getAdminID()
 	if userID != adminChatID {
-		return
-	}
-	reply := func(template string, args ...interface{}) {
-		_, _ = a.chat.SendToUserByID(ctx, userID, fmt.Sprintf(template, args...))
+		return "" // only pay attention to messages from admin, for now
 	}
 
 	if text == "!personal-reports" {
@@ -148,8 +162,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 		logger.Info("admin requested unscheduled global report")
 		chanID := a.getReportChannelID()
 		if chanID == "" {
-			reply("No global report channel configured.")
-			return
+			return "No global report channel configured."
 		}
 		a.GlobalReport(ctx, time.Now(), chanID)
 	} else if strings.HasPrefix(text, "!assoc ") {
@@ -161,19 +174,19 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 			chatID = a.chat.UnwrapUserLink(parts[2])
 		}
 		if chatID == "" {
-			reply("bad !assoc usage [!assoc <gerritUsername> <chatUser>]")
 			logger.Error("bad !assoc usage")
-			return
+			return "bad !assoc usage [!assoc <gerritUsername> <chatUser>]"
 		}
 		logger = logger.With(zap.String("gerrit-username", gerritUsername), zap.String("chat-id", chatID))
 		if err := a.persistentDB.AssociateChatIDWithGerritUser(ctx, gerritUsername, chatID); err != nil {
 			logger.Error("failed to create manual association", zap.Error(err))
-			reply("failed to create association")
+			return "failed to create association"
 		} else {
 			logger.Info("admin created manual association")
-			reply("ok, %s = %s", gerritUsername, a.chat.FormatUserLink(chatID))
+			return fmt.Sprintf("ok, %s = %s", gerritUsername, a.chat.FormatUserLink(chatID))
 		}
 	}
+	return "I don't understand that command."
 }
 
 // getNewInlineComments fetches _all_ inline comments for the specified change and patchset
@@ -212,6 +225,8 @@ var (
 	commentsPatchSetRegex  = regexp.MustCompile(`^\s*Patch Set [0-9]+:\s*`)
 )
 
+// CommentAdded is called when we receive a Gerrit comment-added event.
+//
 // Because we are dealing with software, and software is terrible, the events that come from the
 // Gerrit webhooks plugin do not contain any info about inline comments. We have to get the info
 // from the API.
@@ -287,6 +302,9 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 		wg.Go(func() {
 			a.notify(ctx, owner, tellChangeOwner)
 		})
+		wg.Go(func() {
+			a.generalNotify(ctx, tellChangeOwner)
+		})
 	}
 }
 
@@ -319,6 +337,7 @@ func sortInlineComments(allComments map[string]*gerrit.CommentInfo, newComments 
 	return sliceToSort
 }
 
+// ReviewerAdded is called when we receive a Gerrit reviewer-added event.
 func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change events.Change, eventTime time.Time) {
 	changeLink := a.formatChangeLink(&change)
 	// We want to determine _who_ added the reviewer. If it was the reviewer themself, we
@@ -331,7 +350,9 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 	})
 	if err != nil {
 		a.logger.Error("could not query inline comments via API", zap.Error(err), zap.String("change-id", change.ID))
+		reviewerLink := a.prepareUserLink(ctx, &reviewer)
 		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer or CC for %s", changeLink))
+		a.generalNotify(ctx, fmt.Sprintf("%s was added as a reviewer or CC for %s", reviewerLink, changeLink))
 		return
 	}
 
@@ -379,10 +400,13 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 	} else {
 		// the records in Gerrit are alarmingly different from what the event told us. oh well?
 		a.logger.Error("could not identify reviewer update entity via API", zap.String("change-id", change.ID), zap.String("reviewer", reviewer.Username), zap.Time("event-time", eventTime))
+		reviewerLink := a.prepareUserLink(ctx, &reviewer)
 		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer or CC for %s", changeLink))
+		a.generalNotify(ctx, fmt.Sprintf("%s was added as a reviewer or CC for %s", reviewerLink, changeLink))
 	}
 }
 
+// PatchSetCreated is called when we receive a Gerrit patchset-created event.
 func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, change events.Change, patchSet events.PatchSet) {
 	var wg waitGroup
 	defer wg.Wait()
@@ -404,14 +428,17 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 	if err != nil {
 		a.logger.Error("could not fetch patchset info for change, so can not notify reviewers",
 			zap.Error(err), zap.String("change-id", change.ID))
+		a.generalNotify(ctx, fmt.Sprintf("%s created a new changeset %s.", uploaderLink, changeLink))
 		return
 	}
-	var reviewerMsg, ccMsg string
+	var reviewerMsg, ccMsg, generalMsg string
 	if patchSet.Number == 1 {
 		// this is a whole new changeset. notify accordingly.
 		reviewerMsg = fmt.Sprintf("%s created a new changeset %s, with you as a reviewer.",
 			uploaderLink, changeLink)
 		ccMsg = fmt.Sprintf("%s created a new changeset %s, with you CC'd.",
+			uploaderLink, changeLink)
+		generalMsg = fmt.Sprintf("%s created a new changeset %s.",
 			uploaderLink, changeLink)
 	} else {
 		changeType := "REWORK"
@@ -432,6 +459,7 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 				uploaderLink, patchSet.Number, changeLink, a.chat.FormatLink(diffURL, "see changes"))
 		}
 		ccMsg = reviewerMsg
+		generalMsg = reviewerMsg
 	}
 
 	// send the reviewerMsg or ccMsg, as appropriate, to all relevant users
@@ -449,8 +477,14 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 			}
 		}
 	}
+
+	// and, finally, send the general notification
+	wg.Go(func() {
+		a.generalNotify(ctx, generalMsg)
+	})
 }
 
+// ChangeAbandoned is called when we receive a Gerrit change-abandoned event.
 func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, change events.Change, reason string) {
 	msg := fmt.Sprintf("%s marked change %s as abandoned with the message: %s",
 		a.prepareUserLink(ctx, &abandoner), a.formatChangeLink(&change), reason)
@@ -461,6 +495,7 @@ func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, cha
 	a.notifyAllReviewers(ctx, change.ID, msg, []string{abandoner.Username, change.Owner.Username})
 }
 
+// ChangeMerged is called when we receive a Gerrit change-merged event.
 func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change events.Change, patchSet events.PatchSet) {
 	msg := fmt.Sprintf("%s merged patchset #%d of change %s.", a.prepareUserLink(ctx, &submitter), patchSet.Number, a.formatChangeLink(&change))
 	if submitter.Username != change.Owner.Username {
@@ -470,6 +505,7 @@ func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change
 	a.notifyAllReviewers(ctx, change.ID, msg, []string{submitter.Username, change.Owner.Username})
 }
 
+// AssigneeChanged is called when we receive a Gerrit assignee-changed event.
 func (a *App) AssigneeChanged(_ context.Context, _ events.Account, _ events.Change, _ events.Account) {
 	// We don't use the Assignee field for anything right now, I think. Probably good to ignore this
 }
@@ -487,7 +523,6 @@ func (a *App) notifyAllReviewers(ctx context.Context, changeID, msg string, exce
 	}
 
 	var wg waitGroup
-	defer wg.Wait()
 	for _, reviewer := range reviewers {
 		if _, ok := haveNotified[reviewer.Username]; !ok {
 			haveNotified[reviewer.Username] = struct{}{}
@@ -495,6 +530,7 @@ func (a *App) notifyAllReviewers(ctx context.Context, changeID, msg string, exce
 			wg.Go(func() { a.notify(ctx, reviewerInfo, msg) })
 		}
 	}
+	wg.Wait()
 }
 
 func (a *App) notify(ctx context.Context, gerritUser *events.Account, message string) {
@@ -502,12 +538,27 @@ func (a *App) notify(ctx context.Context, gerritUser *events.Account, message st
 	if chatID == "" {
 		return
 	}
-	_, err := a.chat.SendToUserByID(ctx, chatID, message)
+	_, err := a.chat.SendNotification(ctx, chatID, message)
 	if err != nil {
 		a.logger.Error("failed to send notification",
 			zap.Error(err),
 			zap.String("chat-id", chatID),
 			zap.String("gerrit-username", gerritUser.Username))
+	}
+}
+
+func (a *App) generalNotify(ctx context.Context, message string) {
+	chanID := a.getNotifyChannelID()
+	if chanID == "" {
+		// no global notify channel configured.
+		return
+	}
+	_, err := a.chat.SendChannelNotification(ctx, chanID, message)
+	if err != nil {
+		a.logger.Error("failed to send notification to channel",
+			zap.Error(err),
+			zap.String("channel-id", chanID),
+			zap.String("message", message))
 	}
 }
 
@@ -524,7 +575,7 @@ func (a *App) doStartTimeLookups() {
 			if err != nil {
 				a.logger.Error("could not look up admin in chat system", zap.String("admin-email", *admin), zap.Error(err))
 			} else {
-				a.adminChatID = chatID
+				a.adminChatID = chatID.ChatID()
 			}
 		})
 		if *globalNotifyChannel != "" {
@@ -572,7 +623,7 @@ func (a *App) SendToAdmin(ctx context.Context, message string) {
 		a.logger.Error("not sending message to admin; no admin configured", zap.String("message", message))
 		return
 	}
-	if _, err := a.chat.SendToUserByID(ctx, adminChatID, message); err != nil {
+	if _, err := a.chat.SendNotification(ctx, adminChatID, message); err != nil {
 		a.logger.Error("failed to send message to admin", zap.String("admin-chat-id", adminChatID), zap.String("message", message), zap.Error(err))
 		return
 	}
@@ -593,7 +644,7 @@ func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string
 		return ""
 	}
 	// fall back to checking for the same email address in the chat system
-	chatID, err = a.chat.LookupUserByEmail(ctx, user.Email)
+	chatUserInfo, err := a.chat.LookupUserByEmail(ctx, user.Email)
 	if err != nil {
 		a.logger.Info("user not found in chat system",
 			zap.String("gerrit-username", user.Username),
@@ -601,6 +652,7 @@ func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string
 			zap.Error(err))
 		return ""
 	}
+	chatID = chatUserInfo.ChatID()
 	// success- save this association
 	err = a.persistentDB.AssociateChatIDWithGerritUser(ctx, user.Username, chatID)
 	if err != nil {
@@ -801,8 +853,7 @@ func (a *App) GlobalReport(ctx context.Context, t time.Time, chanID string) {
 	}
 
 	logger.Debug("global report complete", zap.Int("num-messages", len(messages)))
-	totalMessage := a.chat.FormatBold("Waiting for review") + "\n\n" + strings.Join(messages, "\n\n")
-	if _, err := a.chat.SendToChannelByID(ctx, chanID, totalMessage); err != nil {
+	if _, err := a.chat.SendChannelReport(ctx, chanID, "Waiting for review", messages); err != nil {
 		logger.Error("failed to send global message report", zap.Error(err))
 	}
 }
@@ -865,13 +916,13 @@ func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now,
 	}
 
 	// get updated user info from chat system
-	chatInfo, err := a.chat.GetInfoByID(ctx, chatUser.ChatId)
+	chatInfo, err := a.chat.GetUserInfoByID(ctx, chatUser.ChatId)
 	if err != nil {
 		logger.Error("Chat system failed to look up user! Possibly deleted?",
 			zap.Error(err))
 		return
 	}
-	tz := chatInfo.TimeLocation()
+	tz := chatInfo.Timezone()
 	logger = logger.With(
 		zap.String("real-name", chatInfo.RealName()),
 		zap.String("tz", tz.String()))
@@ -908,7 +959,7 @@ func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now,
 	}
 
 	// build the report
-	reportItems := []string{a.chat.FormatBold("Reviews assigned to you")}
+	reportItems := make([]string, 0, len(changes))
 	for _, ch := range changes {
 		createdOn := gerrit.ParseTimestamp(ch.Created)
 		lastUpdated := gerrit.ParseTimestamp(ch.Updated)
@@ -918,11 +969,11 @@ func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now,
 			prettyDate(now, lastUpdated))
 		reportItems = append(reportItems, reviewItem)
 	}
-	report := strings.Join(reportItems, "\n\n")
 	logger = logger.With(zap.Int("review-items-pending", len(changes)))
 
 	// and finally, send it out
-	if _, err := a.chat.SendToUserByID(ctx, chatUser.ChatId, report); err != nil {
+	_, err = a.chat.SendPersonalReport(ctx, chatUser.ChatId, "Reviews assigned to you", reportItems)
+	if err != nil {
 		logger.Error("failed to send report to chat")
 		return
 	}
