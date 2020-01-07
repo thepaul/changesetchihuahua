@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +65,7 @@ func openPersistentDB(dbSource string) (*dbx.DB, string, error) {
 }
 
 func initializePersistentDB(logger *zap.Logger, dbSource string) (*dbx.DB, error) {
+	logger.Info("Opening persistent DB", zap.String("db-source", dbSource))
 	db, driverName, err := openPersistentDB(dbSource)
 	if err != nil {
 		return nil, err
@@ -96,6 +100,10 @@ func initializePersistentDB(logger *zap.Logger, dbSource string) (*dbx.DB, error
 	}
 
 	return db, nil
+}
+
+func (ud *PersistentDB) Close() error {
+	return ud.db.Close()
 }
 
 func (ud *PersistentDB) LookupGerritUser(ctx context.Context, gerritUsername string) (*dbx.GerritUser, error) {
@@ -208,6 +216,63 @@ func (ud *PersistentDB) IdentifyNewInlineComments(ctx context.Context, commentsB
 		}
 	}
 	return nil
+}
+
+func (ud *PersistentDB) GetConfig(ctx context.Context, key, defaultValue string) (string, error) {
+	ud.dbLock.Lock()
+	defer ud.dbLock.Unlock()
+
+	value, err := ud.db.Get_TeamConfig_ConfigValue_By_ConfigKey(ctx, dbx.TeamConfig_ConfigKey(key))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+		return defaultValue, err
+	}
+	return value.ConfigValue, nil
+}
+
+func (ud *PersistentDB) JustGetConfig(ctx context.Context, key, defaultValue string) string {
+	val, err := ud.GetConfig(ctx, key, defaultValue)
+	if err != nil {
+		ud.logger.Info("failed to retrieve value in config db", zap.String("key", key), zap.Error(err))
+	}
+	return val
+}
+
+func (ud *PersistentDB) GetConfigInt(ctx context.Context, key string, defaultValue int) (int, error) {
+	val, err := ud.GetConfig(ctx, key, "")
+	if err != nil || val == "" {
+		return defaultValue, err
+	}
+	numVal, err := strconv.ParseInt(val, 0, 32)
+	if err != nil {
+		return defaultValue, err
+	}
+	return int(numVal), nil
+}
+
+func (ud *PersistentDB) JustGetConfigInt(ctx context.Context, key string, defaultValue int) int {
+	val, err := ud.GetConfigInt(ctx, key, defaultValue)
+	if err != nil {
+		ud.logger.Info("failed to retrieve value in config db", zap.String("key", key), zap.Error(err))
+	}
+	return val
+}
+
+func (ud *PersistentDB) SetConfig(ctx context.Context, key, value string) error {
+	ud.dbLock.Lock()
+	defer ud.dbLock.Unlock()
+
+	_, err := ud.db.DB.ExecContext(ctx, ud.db.Rebind(`
+		INSERT INTO team_configs (config_key, config_value) VALUES (?, ?)
+		ON CONFLICT (config_key) DO UPDATE SET config_value = EXCLUDED.config_value
+	`), key, value)
+	return err
+}
+
+func (ud *PersistentDB) SetConfigInt(ctx context.Context, key string, value int) error {
+	return ud.SetConfig(ctx, key, strconv.FormatInt(int64(value), 32))
 }
 
 // newMigrateLogWrapper is used to wrap a zap.Logger in a way that is usable

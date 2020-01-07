@@ -1,4 +1,4 @@
-// dbx.v1 golang usermap.dbx .
+// dbx.v1 golang persistent.dbx .
 
 model gerrit_user (
     key gerrit_username
@@ -50,4 +50,23 @@ update inline_comment (
 
 delete inline_comment (
     where inline_comment.updated_at < ?
+)
+
+model team_config (
+    key config_key
+
+    field config_key text
+    field config_value text (updatable)
+)
+
+create team_config ( noreturn )
+
+read one (
+    select team_config.config_value
+    where  team_config.config_key = ?
+)
+
+update team_config (
+    where team_config.config_key = ?
+    noreturn
 )

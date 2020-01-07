@@ -2,9 +2,11 @@ package slack
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -19,9 +21,24 @@ import (
 )
 
 var (
-	botOAuthToken = flag.String("bot-oauth", "", "OAuth token for bot")
+	ClientID      = flag.String("slack-client-id", "13639549360.893676519079", "ID issued to this app by Slack")
+	ClientSecret  = flag.String("slack-client-secret", "", "Client secret issued to this app by Slack")
 	debugSlackLib = flag.Bool("debug-slack-lib", false, "Log debug information from Slack client library")
 )
+
+const (
+	AddToSlackButton = `<a href="%s"><img alt="Add to Slack" height="40" width="139" src="https://platform.slack-edge.com/img/add_to_slack.png" srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" /></a>`
+
+	slackAuthURL = "https://slack.com/oauth/authorize"
+)
+
+var appScopes = []string{
+	"bot", // to work as a bot
+}
+
+var userScopes = []string{
+	"identity.basic", // see basic info about the installing user
+}
 
 type slackInterface struct {
 	api *slack.Client
@@ -30,8 +47,9 @@ type slackInterface struct {
 	rootLogger *zap.Logger
 	logger     *zap.Logger
 
-	bot  slack.UserDetails
-	team slack.Team
+	bot       slack.UserDetails
+	team      slack.Team
+	oauthData slack.OAuthResponse
 
 	incomingMessageCallback func(userID, chanID string, isDM bool, text string) string
 }
@@ -49,35 +67,43 @@ func (lw logWrapper) Output(callDepth int, s string) error {
 type EventedChatSystem interface {
 	app.ChatSystem
 
-	HandleEvents(ctx context.Context, chihuahua *app.App) error
+	HandleEvents(ctx context.Context) error
 }
 
-func NewSlackInterface(logger *zap.Logger) (EventedChatSystem, error) {
-	if botOAuthToken == nil {
-		return nil, errors.New("no bot oauth token set")
+func NewSlackInterface(ctx context.Context, logger *zap.Logger, setupData string) (EventedChatSystem, error) {
+	var oauthData slack.OAuthResponse
+	if err := json.Unmarshal([]byte(setupData), &oauthData); err != nil {
+		return nil, err
 	}
+
 	slackLogger := logWrapper{logger}
 	slackOptions := []slack.Option{slack.OptionLog(slackLogger)}
 	if *debugSlackLib {
 		slackOptions = append(slackOptions, slack.OptionDebug(true))
 	}
-	slackAPI := slack.New(*botOAuthToken, slackOptions...)
+	slackAPI := slack.New(oauthData.Bot.BotAccessToken, slackOptions...)
 	slackRTM := slackAPI.NewRTM()
 
 	go slackRTM.ManageConnection()
-	return &slackInterface{
+	go func() {
+		_ = <-ctx.Done()
+		_ = slackRTM.Disconnect()
+	}()
+	s := &slackInterface{
 		api:        slackAPI,
 		rtm:        slackRTM,
+		oauthData:  oauthData,
 		rootLogger: logger,
 		logger:     logger,
-	}, nil
+	}
+	return s, nil
 }
 
 func (s *slackInterface) SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string) string) {
 	s.incomingMessageCallback = cb
 }
 
-func (s *slackInterface) HandleEvents(ctx context.Context, chihuahua *app.App) error {
+func (s *slackInterface) HandleEvents(ctx context.Context) error {
 	for {
 		select {
 		case slackEvent := <-s.rtm.IncomingEvents:
@@ -109,6 +135,8 @@ func (s *slackInterface) handleEvent(ctx context.Context, event slack.RTMEvent) 
 		return s.handleLatencyReport(ctx, event.Data.(*slack.LatencyReport))
 	case "disconnected":
 		return s.handleDisconnected(ctx, event.Data.(*slack.DisconnectedEvent))
+	case "connection_error":
+		return s.handleConnectionError(ctx, event.Data.(*slack.ConnectionErrorEvent))
 	// this type doesn't come from Slack; just from our slack lib when it has a problem
 	// understanding the JSON. we have to do this in order to get a useful error message.
 	case "unmarshalling_error":
@@ -124,13 +152,18 @@ func (s *slackInterface) handleEvent(ctx context.Context, event slack.RTMEvent) 
 	return nil
 }
 
-func (s *slackInterface) handleHello(ctx context.Context, eventData *slack.HelloEvent) error {
+func (s *slackInterface) handleHello(ctx context.Context, _ *slack.HelloEvent) error {
 	s.logger.Info("got hello from slack")
 	return nil
 }
 
 func (s *slackInterface) handleConnecting(ctx context.Context, eventData *slack.ConnectingEvent) error {
 	s.logger.Info("connecting", zap.Int("attempt", eventData.Attempt), zap.Int("connection-count", eventData.ConnectionCount))
+	return nil
+}
+
+func (s *slackInterface) handleConnectionError(ctx context.Context, eventData *slack.ConnectionErrorEvent) error {
+	s.logger.Info("connection error", zap.Int("attempt", eventData.Attempt), zap.Duration("connection-count", eventData.Backoff), zap.Error(eventData.ErrorObj))
 	return nil
 }
 
@@ -187,6 +220,10 @@ func (s *slackInterface) handleUnmarshallingError(ctx context.Context, eventData
 	return nil
 }
 
+func (s *slackInterface) GetInstallingUser(ctx context.Context) (string, error) {
+	return s.oauthData.UserID, nil
+}
+
 func (s *slackInterface) SendNotification(ctx context.Context, id, message string) (app.MessageHandle, error) {
 	// TODO: can the IM channel be cached? is it expected to remain valid as long as the userid?
 	_, _, chanID, err := s.rtm.OpenIMChannelContext(ctx, id)
@@ -220,7 +257,7 @@ func (s *slackInterface) LookupChannelByName(ctx context.Context, channelName st
 	channelName = strings.TrimLeft(channelName, "#")
 	cursor := ""
 	for {
-		conversationsPage, more, err := s.rtm.GetConversationsForUserContext(ctx, &slack.GetConversationsForUserParameters{
+		conversationsPage, more, err := s.api.GetConversationsForUserContext(ctx, &slack.GetConversationsForUserParameters{
 			Cursor:          cursor,
 			ExcludeArchived: true,
 		})
@@ -240,7 +277,7 @@ func (s *slackInterface) LookupChannelByName(ctx context.Context, channelName st
 }
 
 func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (app.ChatUser, error) {
-	user, err := s.rtm.GetUserByEmailContext(ctx, email)
+	user, err := s.api.GetUserByEmailContext(ctx, email)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +293,7 @@ func (s *slackInterface) GetUserInfoByID(ctx context.Context, chatID string) (ap
 	var user *slack.User
 	var presence *slack.UserPresence
 	eg.Go(func() (err error) {
-		user, err = s.rtm.GetUserInfoContext(ctx, chatID)
+		user, err = s.api.GetUserInfoContext(ctx, chatID)
 		return err
 	})
 	eg.Go(func() (err error) {
@@ -292,6 +329,10 @@ func (s *slackInterface) FormatUserLink(chatID string) string {
 	return fmt.Sprintf("<@%s>", chatID)
 }
 
+func (s *slackInterface) FormatChannelLink(channelID string) string {
+	return fmt.Sprintf("<#%s>", channelID)
+}
+
 func (s *slackInterface) FormatLink(url, text string) string {
 	return fmt.Sprintf("<%s|%s>", url, escapeText(text))
 }
@@ -301,6 +342,85 @@ func (s *slackInterface) UnwrapUserLink(userLink string) string {
 		return userLink[2 : len(userLink)-1]
 	}
 	return ""
+}
+
+func (s *slackInterface) UnwrapChannelLink(channelLink string) string {
+	if len(channelLink) > 3 && channelLink[0] == '<' && channelLink[1] == '#' && channelLink[len(channelLink)-1] == '>' {
+		return channelLink[2 : len(channelLink)-1]
+	}
+	return ""
+}
+
+func (s *slackInterface) UnwrapLink(link string) string {
+	return strings.Trim(link, "<>")
+}
+
+func GetOAuthToken(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *slack.OAuthResponse, err error) {
+	return slack.GetOAuthResponseContext(ctx, http.DefaultClient, clientID, clientSecret, code, redirectURI)
+}
+
+// GetOAuthV2Token is based on slack.GetOAuthResponseContext(), but uses oauth.v2.access (and
+// hence a slightly different response type).
+func GetOAuthV2Token(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *OAuthV2Response, err error) {
+	values := url.Values{
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+	}
+	response := &OAuthV2Response{}
+	if err := postForm(ctx, slack.APIURL+"oauth.v2.access", values, response); err != nil {
+		return nil, err
+	}
+	return response, response.Err()
+}
+
+// postForm is very similar to slack.postForm(); reimplemented for the sake of getOAuthToken().
+func postForm(ctx context.Context, endpoint string, values url.Values, intf interface{}) error {
+	reqBody := strings.NewReader(values.Encode())
+	req, err := http.NewRequest("POST", endpoint, reqBody)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req = req.WithContext(ctx)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return errs.New("unexpected status code %d from Slack", resp.StatusCode)
+	}
+	parser := json.NewDecoder(resp.Body)
+	if err := parser.Decode(intf); err != nil {
+		return err
+	}
+	return nil
+}
+
+type OAuthV2ResponseTeam struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+}
+
+type OAuthV2ResponseUser struct {
+	ID          string `json:"id"`
+	Scope       string `json:"scope"`
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+}
+
+type OAuthV2Response struct {
+	AccessToken string              `json:"access_token"`
+	TokenType   string              `json:"token_type"`
+	Scope       string              `json:"scope"`
+	BotUserID   string              `json:"bot_user_id"`
+	AppID       string              `json:"app_id"`
+	Team        OAuthV2ResponseTeam `json:"team"`
+	Enterprise  OAuthV2ResponseTeam `json:"enterprise"`
+	AuthedUser  OAuthV2ResponseUser `json:"authed_user"`
+	slack.SlackResponse
 }
 
 func escapeText(t string) string {
@@ -346,4 +466,13 @@ func (u *slackUser) IsOnline() bool {
 
 func (u *slackUser) Timezone() *time.Location {
 	return time.FixedZone(fmt.Sprintf("offset%d", u.info.TZOffset), u.info.TZOffset)
+}
+
+func AssembleSlackAuthURL(redirectURL string) string {
+	values := make(url.Values)
+	values.Set("client_id", *ClientID)
+	values.Set("scope", strings.Join(appScopes, ","))
+	values.Set("user_scope", strings.Join(userScopes, ","))
+	values.Set("redirect_uri", redirectURL)
+	return slackAuthURL + "?" + values.Encode()
 }

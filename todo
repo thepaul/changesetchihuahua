@@ -1,0 +1,9 @@
+wishlist:
+
+* rewrite jenkins notices, give blue ocean URLs
+  - https://build.dev.storj.io/job/storj-gerrit/1306/ -> https://build.dev.storj.io/blue/organizations/jenkins/storj-gerrit/detail/storj-gerrit/1306/pipeline/
+* unfurl gerrit URLs
+* auto-link gerrit URLs for syntax 'storj#234'
+  * put some emoji next to such URLs to indicate status, and update those later on to keep them accurate with later changes
+* auto-assign reviewers on configured projects if none supplied
+* delete or edit-to-strikeout lines in reports about changesets that were merged or abandoned

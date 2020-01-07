@@ -283,6 +283,11 @@ CREATE TABLE inline_comments (
 	updated_at timestamp NOT NULL,
 	PRIMARY KEY ( comment_id )
 );
+CREATE TABLE team_configs (
+	config_key text NOT NULL,
+	config_value text NOT NULL,
+	PRIMARY KEY ( config_key )
+);
 CREATE INDEX last_report_idx ON gerrit_users ( last_report );
 CREATE INDEX updated_at_idx ON inline_comments ( updated_at );`
 }
@@ -358,6 +363,11 @@ CREATE TABLE inline_comments (
 	comment_id TEXT NOT NULL,
 	updated_at TIMESTAMP NOT NULL,
 	PRIMARY KEY ( comment_id )
+);
+CREATE TABLE team_configs (
+	config_key TEXT NOT NULL,
+	config_value TEXT NOT NULL,
+	PRIMARY KEY ( config_key )
 );
 CREATE INDEX last_report_idx ON gerrit_users ( last_report );
 CREATE INDEX updated_at_idx ON inline_comments ( updated_at );`
@@ -559,6 +569,55 @@ func (f InlineComment_UpdatedAt_Field) value() interface{} {
 }
 
 func (InlineComment_UpdatedAt_Field) _Column() string { return "updated_at" }
+
+type TeamConfig struct {
+	ConfigKey   string
+	ConfigValue string
+}
+
+func (TeamConfig) _Table() string { return "team_configs" }
+
+type TeamConfig_Update_Fields struct {
+	ConfigValue TeamConfig_ConfigValue_Field
+}
+
+type TeamConfig_ConfigKey_Field struct {
+	_set   bool
+	_null  bool
+	_value string
+}
+
+func TeamConfig_ConfigKey(v string) TeamConfig_ConfigKey_Field {
+	return TeamConfig_ConfigKey_Field{_set: true, _value: v}
+}
+
+func (f TeamConfig_ConfigKey_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (TeamConfig_ConfigKey_Field) _Column() string { return "config_key" }
+
+type TeamConfig_ConfigValue_Field struct {
+	_set   bool
+	_null  bool
+	_value string
+}
+
+func TeamConfig_ConfigValue(v string) TeamConfig_ConfigValue_Field {
+	return TeamConfig_ConfigValue_Field{_set: true, _value: v}
+}
+
+func (f TeamConfig_ConfigValue_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (TeamConfig_ConfigValue_Field) _Column() string { return "config_value" }
 
 func toUTC(t time.Time) time.Time {
 	return t.UTC()
@@ -774,6 +833,10 @@ func (h *__sqlbundle_Hole) Render() string { return h.SQL.Render() }
 // end runtime support for building sql statements
 //
 
+type ConfigValue_Row struct {
+	ConfigValue string
+}
+
 func (obj *postgresImpl) CreateNoReturn_GerritUser(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
 	gerrit_user_chat_id GerritUser_ChatId_Field,
@@ -789,6 +852,26 @@ func (obj *postgresImpl) CreateNoReturn_GerritUser(ctx context.Context,
 	obj.logStmt(__stmt, __gerrit_username_val, __chat_id_val, __last_report_val)
 
 	_, err = obj.driver.Exec(__stmt, __gerrit_username_val, __chat_id_val, __last_report_val)
+	if err != nil {
+		return obj.makeErr(err)
+	}
+	return nil
+
+}
+
+func (obj *postgresImpl) CreateNoReturn_TeamConfig(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field,
+	team_config_config_value TeamConfig_ConfigValue_Field) (
+	err error) {
+	__config_key_val := team_config_config_key.value()
+	__config_value_val := team_config_config_value.value()
+
+	var __embed_stmt = __sqlbundle_Literal("INSERT INTO team_configs ( config_key, config_value ) VALUES ( ?, ? )")
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __config_key_val, __config_value_val)
+
+	_, err = obj.driver.Exec(__stmt, __config_key_val, __config_value_val)
 	if err != nil {
 		return obj.makeErr(err)
 	}
@@ -847,6 +930,27 @@ func (obj *postgresImpl) All_GerritUser_By_LastReport_Less(ctx context.Context,
 		return nil, obj.makeErr(err)
 	}
 	return rows, nil
+
+}
+
+func (obj *postgresImpl) Get_TeamConfig_ConfigValue_By_ConfigKey(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field) (
+	row *ConfigValue_Row, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT team_configs.config_value FROM team_configs WHERE team_configs.config_key = ?")
+
+	var __values []interface{}
+	__values = append(__values, team_config_config_key.value())
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	row = &ConfigValue_Row{}
+	err = obj.driver.QueryRow(__stmt, __values...).Scan(&row.ConfigValue)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return row, nil
 
 }
 
@@ -926,6 +1030,42 @@ func (obj *postgresImpl) Update_InlineComment_By_CommentId(ctx context.Context,
 	return inline_comment, nil
 }
 
+func (obj *postgresImpl) UpdateNoReturn_TeamConfig_By_ConfigKey(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field,
+	update TeamConfig_Update_Fields) (
+	err error) {
+	var __sets = &__sqlbundle_Hole{}
+
+	var __embed_stmt = __sqlbundle_Literals{Join: "", SQLs: []__sqlbundle_SQL{__sqlbundle_Literal("UPDATE team_configs SET "), __sets, __sqlbundle_Literal(" WHERE team_configs.config_key = ?")}}
+
+	__sets_sql := __sqlbundle_Literals{Join: ", "}
+	var __values []interface{}
+	var __args []interface{}
+
+	if update.ConfigValue._set {
+		__values = append(__values, update.ConfigValue.value())
+		__sets_sql.SQLs = append(__sets_sql.SQLs, __sqlbundle_Literal("config_value = ?"))
+	}
+
+	if len(__sets_sql.SQLs) == 0 {
+		return emptyUpdate()
+	}
+
+	__args = append(__args, team_config_config_key.value())
+
+	__values = append(__values, __args...)
+	__sets.SQL = __sets_sql
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	_, err = obj.driver.Exec(__stmt, __values...)
+	if err != nil {
+		return obj.makeErr(err)
+	}
+	return nil
+}
+
 func (obj *postgresImpl) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
 	inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
 	count int64, err error) {
@@ -965,6 +1105,16 @@ func (impl postgresImpl) isConstraintError(err error) (
 func (obj *postgresImpl) deleteAll(ctx context.Context) (count int64, err error) {
 	var __res sql.Result
 	var __count int64
+	__res, err = obj.driver.Exec("DELETE FROM team_configs;")
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	__count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+	count += __count
 	__res, err = obj.driver.Exec("DELETE FROM inline_comments;")
 	if err != nil {
 		return 0, obj.makeErr(err)
@@ -1005,6 +1155,26 @@ func (obj *sqlite3Impl) CreateNoReturn_GerritUser(ctx context.Context,
 	obj.logStmt(__stmt, __gerrit_username_val, __chat_id_val, __last_report_val)
 
 	_, err = obj.driver.Exec(__stmt, __gerrit_username_val, __chat_id_val, __last_report_val)
+	if err != nil {
+		return obj.makeErr(err)
+	}
+	return nil
+
+}
+
+func (obj *sqlite3Impl) CreateNoReturn_TeamConfig(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field,
+	team_config_config_value TeamConfig_ConfigValue_Field) (
+	err error) {
+	__config_key_val := team_config_config_key.value()
+	__config_value_val := team_config_config_value.value()
+
+	var __embed_stmt = __sqlbundle_Literal("INSERT INTO team_configs ( config_key, config_value ) VALUES ( ?, ? )")
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __config_key_val, __config_value_val)
+
+	_, err = obj.driver.Exec(__stmt, __config_key_val, __config_value_val)
 	if err != nil {
 		return obj.makeErr(err)
 	}
@@ -1063,6 +1233,27 @@ func (obj *sqlite3Impl) All_GerritUser_By_LastReport_Less(ctx context.Context,
 		return nil, obj.makeErr(err)
 	}
 	return rows, nil
+
+}
+
+func (obj *sqlite3Impl) Get_TeamConfig_ConfigValue_By_ConfigKey(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field) (
+	row *ConfigValue_Row, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT team_configs.config_value FROM team_configs WHERE team_configs.config_key = ?")
+
+	var __values []interface{}
+	__values = append(__values, team_config_config_key.value())
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	row = &ConfigValue_Row{}
+	err = obj.driver.QueryRow(__stmt, __values...).Scan(&row.ConfigValue)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return row, nil
 
 }
 
@@ -1152,6 +1343,42 @@ func (obj *sqlite3Impl) Update_InlineComment_By_CommentId(ctx context.Context,
 	return inline_comment, nil
 }
 
+func (obj *sqlite3Impl) UpdateNoReturn_TeamConfig_By_ConfigKey(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field,
+	update TeamConfig_Update_Fields) (
+	err error) {
+	var __sets = &__sqlbundle_Hole{}
+
+	var __embed_stmt = __sqlbundle_Literals{Join: "", SQLs: []__sqlbundle_SQL{__sqlbundle_Literal("UPDATE team_configs SET "), __sets, __sqlbundle_Literal(" WHERE team_configs.config_key = ?")}}
+
+	__sets_sql := __sqlbundle_Literals{Join: ", "}
+	var __values []interface{}
+	var __args []interface{}
+
+	if update.ConfigValue._set {
+		__values = append(__values, update.ConfigValue.value())
+		__sets_sql.SQLs = append(__sets_sql.SQLs, __sqlbundle_Literal("config_value = ?"))
+	}
+
+	if len(__sets_sql.SQLs) == 0 {
+		return emptyUpdate()
+	}
+
+	__args = append(__args, team_config_config_key.value())
+
+	__values = append(__values, __args...)
+	__sets.SQL = __sets_sql
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	_, err = obj.driver.Exec(__stmt, __values...)
+	if err != nil {
+		return obj.makeErr(err)
+	}
+	return nil
+}
+
 func (obj *sqlite3Impl) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
 	inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
 	count int64, err error) {
@@ -1196,6 +1423,24 @@ func (obj *sqlite3Impl) getLastGerritUser(ctx context.Context,
 
 }
 
+func (obj *sqlite3Impl) getLastTeamConfig(ctx context.Context,
+	pk int64) (
+	team_config *TeamConfig, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT team_configs.config_key, team_configs.config_value FROM team_configs WHERE _rowid_ = ?")
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, pk)
+
+	team_config = &TeamConfig{}
+	err = obj.driver.QueryRow(__stmt, pk).Scan(&team_config.ConfigKey, &team_config.ConfigValue)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return team_config, nil
+
+}
+
 func (obj *sqlite3Impl) getLastInlineComment(ctx context.Context,
 	pk int64) (
 	inline_comment *InlineComment, err error) {
@@ -1232,6 +1477,16 @@ func (impl sqlite3Impl) isConstraintError(err error) (
 func (obj *sqlite3Impl) deleteAll(ctx context.Context) (count int64, err error) {
 	var __res sql.Result
 	var __count int64
+	__res, err = obj.driver.Exec("DELETE FROM team_configs;")
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	__count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+	count += __count
 	__res, err = obj.driver.Exec("DELETE FROM inline_comments;")
 	if err != nil {
 		return 0, obj.makeErr(err)
@@ -1322,6 +1577,18 @@ func (rx *Rx) CreateNoReturn_GerritUser(ctx context.Context,
 
 }
 
+func (rx *Rx) CreateNoReturn_TeamConfig(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field,
+	team_config_config_value TeamConfig_ConfigValue_Field) (
+	err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.CreateNoReturn_TeamConfig(ctx, team_config_config_key, team_config_config_value)
+
+}
+
 func (rx *Rx) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
 	inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
 	count int64, err error) {
@@ -1343,6 +1610,16 @@ func (rx *Rx) Get_GerritUser_By_GerritUsername(ctx context.Context,
 	return tx.Get_GerritUser_By_GerritUsername(ctx, gerrit_user_gerrit_username)
 }
 
+func (rx *Rx) Get_TeamConfig_ConfigValue_By_ConfigKey(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field) (
+	row *ConfigValue_Row, err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.Get_TeamConfig_ConfigValue_By_ConfigKey(ctx, team_config_config_key)
+}
+
 func (rx *Rx) UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
 	update GerritUser_Update_Fields) (
@@ -1352,6 +1629,17 @@ func (rx *Rx) UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.Context,
 		return
 	}
 	return tx.UpdateNoReturn_GerritUser_By_GerritUsername(ctx, gerrit_user_gerrit_username, update)
+}
+
+func (rx *Rx) UpdateNoReturn_TeamConfig_By_ConfigKey(ctx context.Context,
+	team_config_config_key TeamConfig_ConfigKey_Field,
+	update TeamConfig_Update_Fields) (
+	err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.UpdateNoReturn_TeamConfig_By_ConfigKey(ctx, team_config_config_key, update)
 }
 
 func (rx *Rx) Update_InlineComment_By_CommentId(ctx context.Context,
@@ -1376,6 +1664,11 @@ type Methods interface {
 		optional GerritUser_Create_Fields) (
 		err error)
 
+	CreateNoReturn_TeamConfig(ctx context.Context,
+		team_config_config_key TeamConfig_ConfigKey_Field,
+		team_config_config_value TeamConfig_ConfigValue_Field) (
+		err error)
+
 	Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
 		inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
 		count int64, err error)
@@ -1384,9 +1677,18 @@ type Methods interface {
 		gerrit_user_gerrit_username GerritUser_GerritUsername_Field) (
 		gerrit_user *GerritUser, err error)
 
+	Get_TeamConfig_ConfigValue_By_ConfigKey(ctx context.Context,
+		team_config_config_key TeamConfig_ConfigKey_Field) (
+		row *ConfigValue_Row, err error)
+
 	UpdateNoReturn_GerritUser_By_GerritUsername(ctx context.Context,
 		gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
 		update GerritUser_Update_Fields) (
+		err error)
+
+	UpdateNoReturn_TeamConfig_By_ConfigKey(ctx context.Context,
+		team_config_config_key TeamConfig_ConfigKey_Field,
+		update TeamConfig_Update_Fields) (
 		err error)
 
 	Update_InlineComment_By_CommentId(ctx context.Context,

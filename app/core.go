@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zeebo/errs"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
@@ -21,27 +22,20 @@ import (
 )
 
 const (
-	Version = "0.0.1"
+	// default hour (in 24-hour time) in each user's local time zone when their personal
+	// work needed report will be sent to them
+	defaultPersonalReportHour = 11
+	// default hour (in 24-hour time) in UTC when the daily report will be sent to the
+	// global-report-channel
+	defaultGlobalReportHour = 15
+	// Gerrit query to use for determining change sets with work needed for the global report
+	defaultWorkNeededQuery = "is:open -is:wip -label:Code-Review=-2"
 )
 
 var (
-	admin = flag.String("admin", "", "Identity of an admin by email address. Will be contacted through the chat system, not email")
-
-	personalReportHour = flag.Int("user-report-hour", 11, "Earliest hour (in 24-hour time) in user's local time when review report should be sent, if they are online. If they are not online, the system will keep checking every hour during working hours.")
-
 	minIntervalBetweenReports = flag.Duration("min-interval-between-reports", time.Hour*10, "Minimum amount of time that must elapse before more personalized Gerrit reports are sent to a given user")
 
-	globalNotifyChannel = flag.String("global-notify-channel", "", "A channel to which all generally-applicable notifications should be sent")
-
-	globalReportChannel = flag.String("global-report-channel", "", "A channel to which a daily report will be sent to the global-notify-channel, noting what change sets have been waiting too long and who they're waiting for")
-
-	globalReportHour = flag.Int("global-report-hour", 15, "Hour (in 24-hour time) in UTC when the daily report will be sent to global-report-channel")
-
-	removeProjectPrefix = flag.String("remove-project-prefix", "", "A common prefix on project names which can be removed if present before displaying in links")
-
 	inlineCommentMaxAge = flag.Duration("inline-comment-max-age", time.Hour, "Inline comments older than this will not be reported, even if not found in the cache")
-
-	workNeededQuery = flag.String("work-needed-query", "is:open -is:wip -label:Code-Review=-2", "Gerrit query to use for determining change sets with work needed for the global report")
 )
 
 const (
@@ -57,6 +51,7 @@ const (
 // and IRC, but I'm not familiar with the APIs of many other multi-user chat networks.
 type ChatSystem interface {
 	SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string) string)
+	GetInstallingUser(ctx context.Context) (string, error)
 
 	GetUserInfoByID(ctx context.Context, chatID string) (ChatUser, error)
 	LookupUserByEmail(ctx context.Context, email string) (ChatUser, error)
@@ -70,9 +65,12 @@ type ChatSystem interface {
 	FormatBold(msg string) string
 	FormatItalic(msg string) string
 	FormatChangeLink(project string, number int, url, subject string) string
+	FormatChannelLink(channelID string) string
 	FormatUserLink(chatID string) string
 	FormatLink(url, text string) string
 	UnwrapUserLink(userLink string) string
+	UnwrapChannelLink(channelLink string) string
+	UnwrapLink(link string) string
 }
 
 // MessageHandle represents a sent message. Some chat systems support editing and deletion of
@@ -90,31 +88,106 @@ type ChatUser interface {
 	Timezone() *time.Location
 }
 
+type configItemType int
+
+const (
+	ConfigItemString = configItemType(iota)
+	ConfigItemInt
+	ConfigItemChannel
+	ConfigItemUserList
+)
+
+type configItem struct {
+	Name string
+	Description string
+	ItemType configItemType
+}
+
+var configItems = []configItem{
+	{Name: "gerrit-address", Description: "URL to your Gerrit server (e.g. `https://gerrit-review.googlesource.com/`)"},
+	{Name: "admin-ids", Description: "comma-separated list of chat IDs of admins", ItemType: ConfigItemUserList},
+	{Name: "remove-project-prefix", Description: "a common prefix on project names which can be removed if present before displaying in links (e.g., `myCompany/`)", ItemType: ConfigItemString},
+	{Name: "global-notify-channel", Description: "A channel to which all generally-applicable notifications should be sent", ItemType: ConfigItemChannel},
+	{Name: "global-report-channel", Description: "A channel to which a daily report will be sent, noting which change sets have been waiting too long and who they're waiting for", ItemType: ConfigItemChannel},
+	{Name: "global-report-hour", Description: "Hour (in 24-hour time) in UTC when the daily report will be sent to global-report-channel", ItemType: ConfigItemInt},
+	{Name: "personal-report-hour", Description: "Hour (in 24-hour time) in each user's local timezone when the daily review report should be sent, if they are online. If they are not online, the system will keep checking every hour during working hours.", ItemType: ConfigItemInt},
+	{Name: "work-needed-query", Description: "Gerrit query to use for determining change sets with work needed for the global report", ItemType: ConfigItemString},
+}
+
 type App struct {
 	logger       *zap.Logger
 	chat         ChatSystem
 	persistentDB *PersistentDB
-	gerritClient *gerrit.Client
+
+	gerritLock   sync.Mutex
+	gerritHandle *gerrit.Client
 
 	reporterLock sync.Mutex
 
-	adminChatID           string
 	notifyChannelID       string
 	globalReportChannelID string
 	lookupOnce            sync.Once
+
+	// a send is done on this channel when PeriodicGlobalReport may need to reread config
+	reconfigureChannel chan struct{}
+
+	// A common prefix on project names which can be removed if present before displaying in
+	// links; configure by way of remove-project-prefix config item
+	removeProjectPrefix string
 }
 
-func New(logger *zap.Logger, chat ChatSystem, persistentDB *PersistentDB, gerritClient *gerrit.Client) *App {
+func New(ctx context.Context, logger *zap.Logger, chat ChatSystem, persistentDB *PersistentDB) *App {
 	app := &App{
-		logger:       logger,
-		chat:         chat,
-		persistentDB: persistentDB,
-		gerritClient: gerritClient,
+		logger:             logger,
+		chat:               chat,
+		persistentDB:       persistentDB,
+		reconfigureChannel: make(chan struct{}, 1),
 	}
-	startMsg := fmt.Sprintf("changeset-chihuahua version %s starting up", Version)
+	logger.Info("team starting up")
 	chat.SetIncomingMessageCallback(app.IncomingChatCommand)
-	go app.SendToAdmin(context.Background(), startMsg)
+
+	if err := app.initializeAdmins(ctx); err != nil {
+		logger.Error("failed to initialize admin list", zap.Error(err))
+	}
+	if err := app.initializeGerrit(ctx); err != nil {
+		logger.Error("failed to initialize Gerrit configuration", zap.Error(err))
+	}
+	app.removeProjectPrefix = persistentDB.JustGetConfig(ctx, "remove-project-prefix", "")
 	return app
+}
+
+func (a *App) initializeAdmins(ctx context.Context) error {
+	admins, err := a.persistentDB.GetConfig(ctx, "admin-ids", "")
+	if err != nil {
+		return errs.New("getting configured admin list from config db: %w", err)
+	}
+	if admins != "" {
+		return nil
+	}
+	originalAdmin, err := a.chat.GetInstallingUser(ctx)
+	if err != nil {
+		return errs.New("getting installing user from chat system: %w", err)
+	}
+	a.logger.Info("setting initial team admin", zap.String("original-admin", originalAdmin))
+	if err := a.persistentDB.SetConfig(ctx, "admin-ids", originalAdmin); err != nil {
+		return errs.New("storing initial team admin config: %w", err)
+	}
+	return nil
+}
+
+func (a *App) initializeGerrit(ctx context.Context) error {
+	gerritAddress, err := a.persistentDB.GetConfig(ctx, "gerrit-address", "")
+	if err != nil {
+		return errs.New("check for configured gerrit-address: %w", err)
+	}
+	if gerritAddress == "" {
+		a.logger.Info("no gerrit-address configured yet")
+		return nil
+	}
+	if err := a.configureGerritServer(ctx, gerritAddress); err != nil {
+		return errs.New("opening gerrit-address %q: %w", gerritAddress, err)
+	}
+	return nil
 }
 
 // waitGroup is like errgroup.Group but doesn't ask for or handle errors
@@ -135,6 +208,48 @@ func (w *waitGroup) Wait() {
 
 const chatCommandHandlingTimeout = time.Minute * 10
 
+func (a *App) Close() error {
+	err := a.persistentDB.Close()
+	a.gerritLock.Lock()
+	if a.gerritHandle != nil {
+		err = errs.Combine(err, a.gerritHandle.Close())
+		a.gerritHandle = nil
+	}
+	a.gerritLock.Unlock()
+	return err
+}
+
+func (a *App) getGerritClient() *gerrit.Client {
+	a.gerritLock.Lock()
+	defer a.gerritLock.Unlock()
+	return a.gerritHandle
+}
+
+func (a *App) GerritEvent(ctx context.Context, event events.GerritEvent) {
+	if a.getGerritClient() == nil {
+		a.logger.Info("dropping event, no gerrit client", zap.String("event-type", event.GetType()))
+	}
+	switch ev := event.(type) {
+	case *events.CommentAddedEvent:
+		a.CommentAdded(ctx, ev.Author, ev.Change, ev.PatchSet, ev.Comment, ev.EventCreatedAt())
+	case *events.ReviewerAddedEvent:
+		a.ReviewerAdded(ctx, ev.Reviewer, ev.Change, ev.EventCreatedAt())
+	case *events.PatchSetCreatedEvent:
+		a.PatchSetCreated(ctx, ev.Uploader, ev.Change, ev.PatchSet)
+	case *events.ChangeAbandonedEvent:
+		a.ChangeAbandoned(ctx, ev.Abandoner, ev.Change, ev.Reason)
+	case *events.ChangeMergedEvent:
+		a.ChangeMerged(ctx, ev.Submitter, ev.Change, ev.PatchSet)
+	case *events.AssigneeChangedEvent:
+		a.AssigneeChanged(ctx, ev.Changer, ev.Change, ev.OldAssignee)
+	case *events.DroppedOutputEvent:
+		a.logger.Warn("gerrit reports dropped events")
+	case *events.ReviewerDeletedEvent:
+	default:
+		a.logger.Error("unknown event type", zap.String("event-type", event.GetType()))
+	}
+}
+
 // IncomingChatCommand gets called by the ChatSystem when the bot sees a chat message. This might
 // be a message in a channel that the bot is in, or it might be a direct message (isDM). If this
 // returns a non-empty string, it will be sent to the original channel (or DM session) as a reply.
@@ -150,25 +265,24 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 	ctx, cancel := context.WithTimeout(context.Background(), chatCommandHandlingTimeout)
 	defer cancel()
 
-	adminChatID := a.getAdminID()
-	if userID != adminChatID {
+	if !a.isAdminUser(ctx, userID) {
 		return "" // only pay attention to messages from admin, for now
 	}
 
-	if text == "!personal-reports" {
+	parts := strings.Fields(text)
+	command := parts[0]
+	switch command {
+	case "!personal-reports":
 		logger.Info("admin requested unscheduled personal review reports")
 		a.PersonalReports(ctx, time.Now())
-		return "Ok"
-	} else if text == "!global-report" {
+	case "!global-report":
 		logger.Info("admin requested unscheduled global report")
 		chanID := a.getReportChannelID()
 		if chanID == "" {
 			return "No global report channel configured."
 		}
 		a.GlobalReport(ctx, time.Now(), chanID)
-		return "Ok"
-	} else if strings.HasPrefix(text, "!assoc ") {
-		parts := strings.Split(text, " ")
+	case "!assoc":
 		gerritUsername := ""
 		chatID := ""
 		if len(parts) == 3 {
@@ -177,7 +291,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 		}
 		if chatID == "" {
 			logger.Error("bad !assoc usage")
-			return "bad !assoc usage [!assoc <gerritUsername> <chatUser>]"
+			return "bad !assoc usage (`!assoc <gerritUsername> <chatUser>`)"
 		}
 		logger = logger.With(zap.String("gerrit-username", gerritUsername), zap.String("chat-id", chatID))
 		if err := a.persistentDB.AssociateChatIDWithGerritUser(ctx, gerritUsername, chatID); err != nil {
@@ -185,9 +299,164 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 			return "failed to create association"
 		}
 		logger.Info("admin created manual association")
-		return fmt.Sprintf("ok, %s = %s", gerritUsername, a.chat.FormatUserLink(chatID))
+		return fmt.Sprintf("Ok, %s = %s", gerritUsername, a.chat.FormatUserLink(chatID))
+	case "!config":
+		if len(parts) < 2 {
+			return "bad !config usage (`!config <key> [<value>]`)"
+		}
+		key := parts[1]
+		if len(parts) == 2 {
+			curValue, err := a.getConfigItem(ctx, key)
+			if err != nil {
+				return fmt.Sprintf("failed to look up config value for %q: %v", key, err)
+			}
+			return fmt.Sprintf("%q => %q", key, curValue)
+		}
+		value := parts[2]
+		err := a.setConfigItem(ctx, key, value)
+		if err != nil {
+			return fmt.Sprintf("failed to set %q: %v", key, err)
+		}
+	case "!gerrit-server":
+		if len(parts) != 2 {
+			return "bad !gerrit-server usage [!gerrit-server <URL>]"
+		}
+		addr := a.chat.UnwrapLink(parts[1])
+		if err := a.configureGerritServer(ctx, addr); err != nil {
+			return "Failure: " + err.Error()
+		}
+	default:
+		return "I don't understand that command."
 	}
-	return "I don't understand that command."
+	return "Ok"
+}
+
+func findConfigItem(key string) *configItem {
+	for _, configDef := range configItems {
+		if configDef.Name == key {
+			return &configDef
+		}
+	}
+	return nil
+}
+
+func (a *App) getConfigItem(ctx context.Context, key string) (string, error) {
+	curValue, err := a.persistentDB.GetConfig(ctx, key, "")
+	if err != nil {
+		a.logger.Error("failed to look up config", zap.Error(err))
+		return "", errs.New("db error")
+	}
+	configDef := findConfigItem(key)
+	if configDef == nil {
+		return "", errs.New("%q is not a known config item.", key)
+	}
+	switch configDef.ItemType {
+	case ConfigItemChannel:
+		curValue = a.prepareChannelLink(ctx, "", curValue)
+	case ConfigItemUserList:
+		userIDs := strings.Split(curValue, ",")
+		userLinks := make([]string, 0, len(userIDs))
+		for _, userID := range userIDs {
+			if userID == "" {
+				continue
+			}
+			userLinks = append(userLinks, a.formatUserLink(nil, userID))
+		}
+		curValue = strings.Join(userLinks, ",")
+	}
+	return curValue, nil
+}
+
+func (a *App) setConfigItem(ctx context.Context, key, value string) error {
+	configDef := findConfigItem(key)
+	if configDef == nil {
+		return errs.New("%q is not a known config item.", key)
+	}
+	switch configDef.ItemType {
+	case ConfigItemInt:
+		// just ensure it's valid; we'll still store it as a str
+		_, err := strconv.ParseInt(value, 0, 32)
+		if err != nil {
+			return errs.New("%q is an invalid numeric value", value)
+		}
+	case ConfigItemChannel:
+		value = a.chat.UnwrapChannelLink(value)
+		if value == "" {
+			return errs.New("specify channels by letting the Slack client link them")
+		}
+	case ConfigItemUserList:
+		action := "replace"
+		if strings.HasPrefix(value, "+") {
+			action = "append"
+			value = value[1:]
+		}
+		if strings.HasPrefix(value, "-") {
+			action = "remove"
+			value = value[1:]
+		}
+		fields := strings.Split(value, ",")
+		userIDs := make([]string, 0, len(fields))
+		for _, field := range fields {
+			field = strings.TrimSpace(field)
+			if field == "" {
+				continue
+			}
+			userID := a.chat.UnwrapUserLink(field)
+			if userID == "" {
+				return errs.New("specify users by letting the Slack client link them")
+			}
+			userIDs = append(userIDs, userID)
+		}
+		oldValue := a.persistentDB.JustGetConfig(ctx, key, "")
+		value = marshalUserSet(transformUserSet(parseUserSet(oldValue), userIDs, action))
+	}
+	err := a.persistentDB.SetConfig(ctx, key, value)
+	if err != nil {
+		a.logger.Error("failed to set config", zap.String("key", key), zap.String("value", value), zap.Error(err))
+		return errs.New("db error")
+	}
+
+	// a few special config items need particular handling
+	switch key {
+	case "remove-project-prefix":
+		a.removeProjectPrefix = value
+	case "global-report-hour":
+		a.reconfigureChannel <- struct{}{}
+	case "gerrit-server":
+		if err := a.configureGerritServer(ctx, value); err != nil {
+			a.logger.Error("failed to open new gerrit client", zap.Error(err))
+			// but don't pass this error back to caller, as the config setting was successful
+		}
+	}
+
+	return nil
+}
+
+func (a *App) configureGerritServer(ctx context.Context, gerritAddress string) error {
+	a.gerritLock.Lock()
+	defer a.gerritLock.Unlock()
+
+	a.logger.Info("updating gerrit-server", zap.String("new address", gerritAddress))
+	if a.gerritHandle != nil {
+		if err := a.gerritHandle.Close(); err != nil {
+			a.logger.Error("failed to close old gerritHandle", zap.Error(err))
+		}
+	}
+	gerritClient, err := gerrit.OpenClient(ctx, gerritAddress)
+	if err != nil {
+		return err
+	}
+	a.gerritHandle = gerritClient
+	return nil
+}
+
+func (a *App) isAdminUser(ctx context.Context, chatID string) bool {
+	admins := a.persistentDB.JustGetConfig(ctx, "admin-ids", "")
+	a.logger.Info("got admin-ids", zap.String("admin-ids", admins))
+	adminSet := parseUserSet(admins)
+	a.logger.Info("parsed admin-ids", zap.Any("admin-ids", adminSet))
+	_, ok := adminSet[chatID]
+	return ok
 }
 
 // getNewInlineComments fetches _all_ inline comments for the specified change and patchset
@@ -196,7 +465,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 // the specified time, and consults the db to see which, if any, have not already been seen and
 // reported. The remainder are returned as newInline (which maps comment IDs to their timestamps).
 func (a *App) getNewInlineComments(ctx context.Context, changeID, patchSetID, username string, cutOffTime time.Time) (allInline map[string]*gerrit.CommentInfo, newInline map[string]time.Time, err error) {
-	allComments, err := a.gerritClient.ListRevisionComments(ctx, changeID, patchSetID)
+	allComments, err := a.getGerritClient().ListRevisionComments(ctx, changeID, patchSetID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -355,7 +624,7 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 	// don't need to notify. and if it wasn't, we want to say who did it in the notification.
 	// Unfortunately, the reviewer-added event doesn't carry that information. We turn to the
 	// Gerrit API again.
-	changeInfo, err := a.gerritClient.GetChangeEx(ctx, change.ID, &gerrit.QueryChangesOpts{
+	changeInfo, err := a.getGerritClient().GetChangeEx(ctx, change.ID, &gerrit.QueryChangesOpts{
 		DescribeDetailedAccounts: true,
 		DescribeReviewerUpdates:  true,
 	})
@@ -432,7 +701,7 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 
 	// events.Change does have an AllReviewers field, but apparently it's not populated for
 	// patchset-created events. It's API time
-	changeInfo, err := a.gerritClient.GetPatchSetInfo(ctx, change.ID, strconv.Itoa(patchSet.Number))
+	changeInfo, err := a.getGerritClient().GetPatchSetInfo(ctx, change.ID, strconv.Itoa(patchSet.Number))
 	if err != nil {
 		a.logger.Error("could not fetch patchset info for change, so can not notify reviewers",
 			zap.Error(err), zap.String("change-id", change.ID))
@@ -521,7 +790,7 @@ func (a *App) AssigneeChanged(_ context.Context, _ events.Account, _ events.Chan
 }
 
 func (a *App) notifyAllReviewers(ctx context.Context, changeID, msg string, except []string) {
-	reviewers, err := a.gerritClient.GetChangeReviewers(ctx, changeID)
+	reviewers, err := a.getGerritClient().GetChangeReviewers(ctx, changeID)
 	if err != nil {
 		a.logger.Error("could not query reviewers for change, so can not notify reviewers",
 			zap.Error(err), zap.String("change-id", changeID))
@@ -580,29 +849,23 @@ func (a *App) doStartTimeLookups() {
 		defer cancel()
 
 		var wg waitGroup
-		wg.Go(func() {
-			chatID, err := a.chat.LookupUserByEmail(ctx, *admin)
-			if err != nil {
-				a.logger.Error("could not look up admin in chat system", zap.String("admin-email", *admin), zap.Error(err))
-			} else {
-				a.adminChatID = chatID.ChatID()
-			}
-		})
-		if *globalNotifyChannel != "" {
+		globalNotifyChannel := a.persistentDB.JustGetConfig(ctx, "global-notify-channel", "")
+		if globalNotifyChannel != "" {
 			wg.Go(func() {
-				chanID, err := a.chat.LookupChannelByName(ctx, *globalNotifyChannel)
+				chanID, err := a.chat.LookupChannelByName(ctx, globalNotifyChannel)
 				if err != nil {
-					a.logger.Error("could not look up notify channel in chat system", zap.String("channel-name", *globalNotifyChannel), zap.Error(err))
+					a.logger.Error("could not look up notify channel in chat system", zap.String("channel-name", globalNotifyChannel), zap.Error(err))
 				} else {
 					a.notifyChannelID = chanID
 				}
 			})
 		}
-		if *globalReportChannel != "" {
+		globalReportChannel := a.persistentDB.JustGetConfig(ctx, "global-report-channel", "")
+		if globalReportChannel != "" {
 			wg.Go(func() {
-				chanID, err := a.chat.LookupChannelByName(ctx, *globalReportChannel)
+				chanID, err := a.chat.LookupChannelByName(ctx, globalReportChannel)
 				if err != nil {
-					a.logger.Error("could not look up global report channel in chat system", zap.String("channel-name", *globalReportChannel), zap.Error(err))
+					a.logger.Error("could not look up global report channel in chat system", zap.String("channel-name", globalReportChannel), zap.Error(err))
 				} else {
 					a.globalReportChannelID = chanID
 				}
@@ -610,11 +873,6 @@ func (a *App) doStartTimeLookups() {
 		}
 		wg.Wait()
 	})
-}
-
-func (a *App) getAdminID() string {
-	a.doStartTimeLookups()
-	return a.adminChatID
 }
 
 func (a *App) getNotifyChannelID() string {
@@ -625,18 +883,6 @@ func (a *App) getNotifyChannelID() string {
 func (a *App) getReportChannelID() string {
 	a.doStartTimeLookups()
 	return a.globalReportChannelID
-}
-
-func (a *App) SendToAdmin(ctx context.Context, message string) {
-	adminChatID := a.getAdminID()
-	if adminChatID == "" {
-		a.logger.Error("not sending message to admin; no admin configured", zap.String("message", message))
-		return
-	}
-	if _, err := a.chat.SendNotification(ctx, adminChatID, message); err != nil {
-		a.logger.Error("failed to send message to admin", zap.String("admin-chat-id", adminChatID), zap.String("message", message), zap.Error(err))
-		return
-	}
 }
 
 func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string {
@@ -680,7 +926,7 @@ func (a *App) PeriodicGlobalReport(ctx context.Context, getTime func() time.Time
 		// no global report configured
 		return nil
 	}
-	timer := time.NewTimer(a.nextGlobalReportTime(getTime()))
+	timer := time.NewTimer(a.nextGlobalReportTime(ctx, getTime()))
 
 	for {
 		select {
@@ -691,15 +937,17 @@ func (a *App) PeriodicGlobalReport(ctx context.Context, getTime func() time.Time
 				<-timer.C
 			}
 			return ctx.Err()
+		case <-a.reconfigureChannel:
 		}
-		timer.Reset(a.nextGlobalReportTime(getTime()))
+		timer.Reset(a.nextGlobalReportTime(ctx, getTime()))
 	}
 }
 
-func (a *App) nextGlobalReportTime(now time.Time) time.Duration {
-	nextReport := time.Date(now.Year(), now.Month(), now.Day(), *globalReportHour, 0, 0, 0, time.UTC)
+func (a *App) nextGlobalReportTime(ctx context.Context, now time.Time) time.Duration {
+	globalReportHour := a.persistentDB.JustGetConfigInt(ctx, "global-report-hour", defaultGlobalReportHour)
+	nextReport := time.Date(now.Year(), now.Month(), now.Day(), globalReportHour, 0, 0, 0, time.UTC)
 	if now.After(nextReport) {
-		nextReport = time.Date(now.Year(), now.Month(), now.Day()+1, *globalReportHour, 0, 0, 0, time.UTC)
+		nextReport = time.Date(now.Year(), now.Month(), now.Day()+1, globalReportHour, 0, 0, 0, time.UTC)
 	}
 	return nextReport.Sub(now)
 }
@@ -735,8 +983,14 @@ func (a *App) GlobalReport(ctx context.Context, t time.Time, chanID string) {
 
 	logger := a.logger.With(zap.Time("global-report-start", t), zap.String("channel-id", chanID))
 	logger.Debug("initiating global current changeset report")
+	gerritClient := a.getGerritClient()
+	if gerritClient == nil {
+		logger.Info("skipping report- no gerrit client")
+		return
+	}
 
-	changes, more, err := a.gerritClient.QueryChangesEx(ctx, []string{*workNeededQuery}, &gerrit.QueryChangesOpts{
+	workNeededQuery := a.persistentDB.JustGetConfig(ctx, "work-needed-query", defaultWorkNeededQuery)
+	changes, more, err := gerritClient.QueryChangesEx(ctx, []string{workNeededQuery}, &gerrit.QueryChangesOpts{
 		Limit:                    globalReportMaxSize,
 		DescribeLabels:           true,
 		DescribeDetailedLabels:   true,
@@ -878,9 +1132,14 @@ func (a *App) PersonalReports(ctx context.Context, t time.Time) {
 
 	logger := a.logger.With(zap.Time("personal-reports-start", t))
 	logger.Debug("initiating personal current changeset reports")
+	gerritClient := a.getGerritClient()
+	if gerritClient == nil {
+		logger.Info("skipping reports- no gerrit client")
+		return
+	}
 
 	// get all accounts gerrit knows about
-	accounts, _, err := a.gerritClient.QueryAccountsEx(ctx, "is:active",
+	accounts, _, err := gerritClient.QueryAccountsEx(ctx, "is:active",
 		&gerrit.QueryAccountsOpts{DescribeDetails: true})
 	if err != nil {
 		logger.Error("failed to query current accounts on Gerrit", zap.Error(err))
@@ -951,7 +1210,7 @@ func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now,
 		return
 	}
 	now = now.In(tz)
-	if !a.isGoodTimeForReport(acct, chatInfo, now) {
+	if !a.isGoodTimeForReport(ctx, acct, chatInfo, now) {
 		logger.Info("Not a good time for a report. Skipping.",
 			zap.Time("user-localtime", now))
 		return
@@ -1000,11 +1259,11 @@ func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now,
 }
 
 func (a *App) formatChangeLink(ch *events.Change) string {
-	return a.chat.FormatChangeLink(shortenProjectName(ch.Project), ch.Number, ch.URL, ch.Subject)
+	return a.chat.FormatChangeLink(a.shortenProjectName(ch.Project), ch.Number, ch.URL, ch.Subject)
 }
 
 func (a *App) formatChangeInfoLink(ch *gerrit.ChangeInfo) string {
-	return a.chat.FormatChangeLink(shortenProjectName(ch.Project), ch.Number, a.gerritClient.URLForChange(ch), ch.Subject)
+	return a.chat.FormatChangeLink(a.shortenProjectName(ch.Project), ch.Number, a.getGerritClient().URLForChange(ch), ch.Subject)
 }
 
 func (a *App) prepareUserLink(ctx context.Context, account *events.Account) string {
@@ -1021,6 +1280,17 @@ func (a *App) formatUserLink(account *events.Account, chatID string) string {
 		return account.Name
 	}
 	return account.Username
+}
+
+func (a *App) prepareChannelLink(ctx context.Context, channelName, channelID string) string {
+	if channelID == "" {
+		var err error
+		channelID, err = a.chat.LookupChannelByName(ctx, channelName)
+		if err != nil {
+			return channelName
+		}
+	}
+	return a.chat.FormatChannelLink(channelID)
 }
 
 func (a *App) formatSourceLink(changeURL string, patchSet int, commentInfo *gerrit.CommentInfo) string {
@@ -1080,9 +1350,10 @@ func prettyTimeDelta(delta time.Duration) string {
 	return fmt.Sprintf("%d %s%s", count, timeUnits, plural)
 }
 
-func (a *App) isGoodTimeForReport(_ *gerrit.AccountInfo, _ ChatUser, t time.Time) bool {
+func (a *App) isGoodTimeForReport(ctx context.Context, _ *gerrit.AccountInfo, _ ChatUser, t time.Time) bool {
 	hour := t.Hour()
-	return hour >= *personalReportHour && hour >= workingDayStartHour && hour < workingDayEndHour
+	personalReportHour := a.persistentDB.JustGetConfigInt(ctx, "personal-report-hour", defaultPersonalReportHour)
+	return hour >= personalReportHour && hour >= workingDayStartHour && hour < workingDayEndHour
 }
 
 func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername string) ([]gerrit.ChangeInfo, error) {
@@ -1100,7 +1371,7 @@ func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername string) (
 func (a *App) getAllChangesMatching(ctx context.Context, queryString string, opts *gerrit.QueryChangesOpts) (changes []gerrit.ChangeInfo, err error) {
 	for {
 		opts.StartAt = len(changes)
-		changePage, more, err := a.gerritClient.QueryChangesEx(ctx, []string{queryString}, opts)
+		changePage, more, err := a.getGerritClient().QueryChangesEx(ctx, []string{queryString}, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -1110,6 +1381,13 @@ func (a *App) getAllChangesMatching(ctx context.Context, queryString string, opt
 		}
 	}
 	return changes, nil
+}
+
+func (a *App) shortenProjectName(projectName string) string {
+	if a.removeProjectPrefix != "" && strings.HasPrefix(projectName, a.removeProjectPrefix) {
+		projectName = projectName[len(a.removeProjectPrefix):]
+	}
+	return projectName
 }
 
 func diffURLBetweenPatchSets(change *events.Change, patchSetNum1, patchSetNum2 int) string {
@@ -1122,13 +1400,6 @@ func accountFromAccountInfo(accountInfo *gerrit.AccountInfo) *events.Account {
 		Email:    accountInfo.Email,
 		Username: accountInfo.Username,
 	}
-}
-
-func shortenProjectName(projectName string) string {
-	if *removeProjectPrefix != "" && strings.HasPrefix(projectName, *removeProjectPrefix) {
-		projectName = projectName[len(*removeProjectPrefix):]
-	}
-	return projectName
 }
 
 func absDuration(d time.Duration) time.Duration {

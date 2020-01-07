@@ -14,3 +14,9 @@ CREATE TABLE inline_comments (
 );
 
 CREATE INDEX updated_at_idx ON inline_comments ( updated_at );
+
+CREATE TABLE team_configs (
+	config_key text NOT NULL,
+	config_value text NOT NULL,
+	PRIMARY KEY ( config_key )
+);
