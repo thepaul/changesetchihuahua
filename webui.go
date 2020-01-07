@@ -3,92 +3,77 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"net"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 
-	"github.com/zeebo/errs"
 	"go.uber.org/zap"
 
+	"github.com/jtolds/changesetchihuahua/gerrit/events"
 	"github.com/jtolds/changesetchihuahua/slack"
 )
 
-var (
-	externalURL = flag.String("external-url", "https://localhost.localdomain/", "The URL by which external hosts (including Slack servers) can contact this server")
-)
-
-type UIWebHandler struct {
-	*http.Server
-	logger   *zap.Logger
-	governor *Governor
-
-	slackRedirectURL string
+type uiWebState struct {
+	logger      *zap.Logger
+	governor    *Governor
+	externalURL *url.URL
 }
 
-func NewUIWebHandler(addr string, logger *zap.Logger, governor *Governor, gerritEventSink http.Handler) (*UIWebHandler, error) {
-	mux := NewLoggingMux(logger)
-	stdLogger, err := zap.NewStdLogAt(logger, zap.ErrorLevel)
-	if err != nil {
-		return nil, errs.Wrap(err)
-	}
-	httpServer := &http.Server{
-		Addr:     addr,
-		Handler:  mux,
-		ErrorLog: stdLogger,
-	}
-	uiServer := &UIWebHandler{
-		Server:           httpServer,
-		logger:           logger,
-		governor:         governor,
-		slackRedirectURL: strings.TrimRight(*externalURL, "/") + "/slack/oauth",
-	}
-	mux.Handle("/gerrit/", gerritEventSink)
-	mux.HandleFunc("/slack/", uiServer.maybeOAuthRedirect)
-	mux.HandleFunc("/slack/setup", uiServer.Setup)
-	return uiServer, nil
+type uiWebServer struct {
+	state   *uiWebState
+	handler http.Handler
 }
 
-func (wh *UIWebHandler) Serve(ctx context.Context) error {
-	wh.logger.Info("Listening for web connections", zap.String("bind-address", wh.Server.Addr))
-	go func() {
-		<-ctx.Done()
-		_ = wh.Server.Close()
-	}()
-	return wh.Server.ListenAndServe()
+func newUIWebState(logger *zap.Logger, governor *Governor, externalURL *url.URL) *uiWebState {
+	return &uiWebState{
+		logger:              logger,
+		governor:            governor,
+		externalURL:         externalURL,
+	}
 }
 
-func (wh *UIWebHandler) Setup(w http.ResponseWriter, r *http.Request) {
-	html := fmt.Sprintf(slack.AddToSlackButton, slack.AssembleSlackAuthURL(wh.slackRedirectURL))
+func (ws *uiWebState) slackRedirectURL() string {
+	redirectURL := *ws.externalURL
+	redirectURL.Path = path.Join(redirectURL.Path, "slack", "oauth")
+	return redirectURL.String()
+}
+
+func (ws *uiWebState) Setup(w http.ResponseWriter, r *http.Request) {
+	html := fmt.Sprintf(slack.AddToSlackButton, slack.AssembleSlackAuthURL(ws.slackRedirectURL()))
 	header := w.Header()
 	header.Add("Content-Length", strconv.Itoa(len(html)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(html))
 }
 
-func (wh *UIWebHandler) maybeOAuthRedirect(w http.ResponseWriter, r *http.Request) {
+func (ws *uiWebState) maybeOAuthRedirect(w http.ResponseWriter, r *http.Request) {
 	values := r.URL.Query()
 	code := values.Get("code")
 	if code == "" {
 		w.WriteHeader(http.StatusNotFound)
 	}
 	w.WriteHeader(http.StatusOK)
-	resp, err := slack.GetOAuthToken(r.Context(), *slack.ClientID, *slack.ClientSecret, code, wh.slackRedirectURL)
+	resp, err := slack.GetOAuthToken(r.Context(), *slack.ClientID, *slack.ClientSecret, code, ws.slackRedirectURL())
 	if err != nil {
-		wh.logger.Error("Failed to acquire OAuth token from Slack", zap.Error(err))
+		ws.logger.Error("Failed to acquire OAuth token from Slack", zap.Error(err))
 		_, _ = w.Write([]byte(fmt.Sprintf("Failed to acquire OAuth token from Slack: %v", err)))
 		return
 	}
-	wh.logger.Info("OAuth flow success", zap.Any("response", resp))
+	ws.logger.Info("OAuth flow success", zap.Any("response", resp))
 	jsonBlob, err := json.Marshal(resp)
 	if err != nil {
-		wh.logger.Error("failed to marshal OAuth token data?!", zap.Error(err))
+		ws.logger.Error("failed to marshal OAuth token data?!", zap.Error(err))
 		_, _ = w.Write([]byte("Failed to record OAuth token data."))
 		return
 	}
-	if err := wh.governor.NewTeam(resp.TeamID, string(jsonBlob)); err != nil {
-		wh.logger.Error("failed to create new team record", zap.Error(err))
+	if err := ws.governor.NewTeam(resp.TeamID, string(jsonBlob)); err != nil {
+		ws.logger.Error("failed to create new team record", zap.Error(err))
 		_, _ = w.Write([]byte("Failed to record new team."))
 		return
 	}
@@ -96,37 +81,49 @@ func (wh *UIWebHandler) maybeOAuthRedirect(w http.ResponseWriter, r *http.Reques
 	_, _ = w.Write([]byte(fmt.Sprintf("Success! Changeset Chihuahua is installed to your %s workspace.\n", resp.TeamName)))
 }
 
-type LoggingMux struct {
-	*http.ServeMux
-	logger *zap.Logger
+func (ws *uiWebState) gerritEvent(w http.ResponseWriter, r *http.Request) {
+	pathParts := strings.SplitN(r.URL.Path, "/", 2)
+	teamID := pathParts[0]
+
+	limited := io.LimitedReader{R: r.Body, N: events.MaxEventPayloadSize}
+	body, err := ioutil.ReadAll(&limited)
+	if err != nil {
+		ws.logger.Error("reading gerrit payload", zap.Error(err))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	event, err := events.DecodeGerritEvent(body)
+	if err != nil {
+		ws.logger.Error("decoding payload", zap.Error(err), zap.ByteString("data", body))
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		return
+	}
+	ws.logger.Debug("received gerrit event", zap.String("origin", r.RemoteAddr), zap.String("event-type", event.GetType()))
+	ws.governor.GerritEventReceived(teamID, event)
+	w.WriteHeader(http.StatusOK)
 }
 
-func NewLoggingMux(logger *zap.Logger) *LoggingMux {
-	mux := http.NewServeMux()
-	return &LoggingMux{ServeMux: mux, logger: logger}
+func newUIWebHandler(logger *zap.Logger, state *uiWebState) http.Handler {
+	mux := NewLoggingMux(logger)
+	mux.HandleFunc("/gerrit/", state.gerritEvent)
+	mux.HandleFunc("/slack/", state.maybeOAuthRedirect)
+	mux.HandleFunc("/slack/setup", state.Setup)
+	return mux
 }
 
-func (lm *LoggingMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	logger := lm.logger.With(zap.String("remote-addr", r.RemoteAddr), zap.String("request-uri", r.RequestURI), zap.String("method", r.Method))
-	logger.Info("incoming request")
-	loggingWriter := loggingResponseWriter{ResponseWriter: w}
-	lm.ServeMux.ServeHTTP(&loggingWriter, r)
-	logger.Info("request completed", zap.Int("bytes-written", loggingWriter.bytesWritten), zap.Int("status-code", loggingWriter.statusCode))
+func newUIWebServer(state *uiWebState, handler http.Handler) *uiWebServer {
+	return &uiWebServer{
+		state:   state,
+		handler: handler,
+	}
 }
 
-type loggingResponseWriter struct {
-	http.ResponseWriter
-	bytesWritten int
-	statusCode   int
-}
-
-func (w *loggingResponseWriter) Write(data []byte) (int, error) {
-	n, err := w.ResponseWriter.Write(data)
-	w.bytesWritten += n
-	return n, err
-}
-
-func (w *loggingResponseWriter) WriteHeader(statusCode int) {
-	w.statusCode = statusCode
-	w.ResponseWriter.WriteHeader(statusCode)
+func (server *uiWebServer) Serve(ctx context.Context, listener net.Listener) error {
+	server.state.logger.Info("Listening for connections", zap.String("bind-address", listener.Addr().String()))
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+	return http.Serve(listener, server.handler)
 }

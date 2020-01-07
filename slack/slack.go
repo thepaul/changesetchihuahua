@@ -86,7 +86,7 @@ func NewSlackInterface(ctx context.Context, logger *zap.Logger, setupData string
 
 	go slackRTM.ManageConnection()
 	go func() {
-		_ = <-ctx.Done()
+		<-ctx.Done()
 		_ = slackRTM.Disconnect()
 	}()
 	s := &slackInterface{

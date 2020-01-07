@@ -11,6 +11,10 @@ var (
 	EventDecodingError = errs.Class("event decoding error")
 )
 
+// MaxEventPayloadSize is the size of the largest event payload this system will allow. Larger
+// event payloads will result in errors and will not be processed.
+const MaxEventPayloadSize = 10*1024*1024
+
 // GerritEvent is a common interface to various gerrit event structures.
 type GerritEvent interface {
 	GetType() string
