@@ -104,11 +104,13 @@ func (ws *uiWebState) gerritEvent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func newUIWebHandler(logger *zap.Logger, state *uiWebState) http.Handler {
+func newUIWebHandler(logger *zap.Logger, state *uiWebState, isSecure bool) http.Handler {
 	mux := NewLoggingMux(logger)
 	mux.HandleFunc("/gerrit/", state.gerritEvent)
-	mux.HandleFunc("/slack/", state.maybeOAuthRedirect)
-	mux.HandleFunc("/slack/setup", state.Setup)
+	if isSecure {
+		mux.HandleFunc("/slack/", state.maybeOAuthRedirect)
+		mux.HandleFunc("/slack/setup", state.Setup)
+	}
 	return mux
 }
 

@@ -43,14 +43,20 @@ func main() {
 	if err != nil {
 		logger.Fatal("parsing external-url", zap.String("external-url", *externalURL), zap.Error(err))
 	}
+	if parsedURL.Scheme != "https" {
+		logger.Fatal("invalid external-url: scheme must be https.")
+	}
+	if parsedURL.Port() != "" {
+		logger.Fatal("invalid external-url: port may not be specified. ACME challenges won't work if external hosts can't contact this server on port 443.")
+	}
 	webState := newUIWebState(logger.Named("web-state"), governor, parsedURL)
-	webHandler := newUIWebHandler(logger.Named("web-handler"), webState)
 
 	if *httpListenAddr != "" {
+		webHandler := newUIWebHandler(logger.Named("web-handler"), webState, false)
 		httpServer := newUIWebServer(webState, webHandler)
 		httpListener, err := net.Listen("tcp", *httpListenAddr)
 		if err != nil {
-			logger.Fatal("listening for http on %q: %w", zap.String("listen-addr", *httpListenAddr), zap.Error(err))
+			logger.Fatal("listening for http", zap.String("listen-addr", *httpListenAddr), zap.Error(err))
 		}
 		errg.Go(func() error {
 			return httpServer.Serve(ctx, httpListener)
@@ -64,8 +70,12 @@ func main() {
 			}
 			return nil
 		})
+		webHandler := newUIWebHandler(logger.Named("web-handler"), webState, true)
 		httpsServer := newUIWebServer(webState, webHandler)
-		httpsListener := manager.Listener()
+		httpsListener, err := manager.Listen("tcp", *httpsListenAddr)
+		if err != nil {
+			logger.Fatal("listening for https", zap.String("listen-addr", *httpsListenAddr), zap.Error(err))
+		}
 		errg.Go(func() error {
 			return httpsServer.Serve(ctx, httpsListener)
 		})

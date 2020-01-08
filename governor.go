@@ -190,6 +190,7 @@ func (g *Governor) GerritEventReceived(teamID string, event events.GerritEvent) 
 	team, ok := g.teams[teamID]
 	g.teamsLock.Unlock()
 	if !ok {
+		g.logger.Info("received event for unknown team", zap.String("team-id", teamID))
 		return
 	}
 
