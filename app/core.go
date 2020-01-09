@@ -243,6 +243,7 @@ func (a *App) GerritEvent(ctx context.Context, event events.GerritEvent) {
 		a.AssigneeChanged(ctx, ev.Changer, ev.Change, ev.OldAssignee)
 	case *events.DroppedOutputEvent:
 		a.logger.Warn("gerrit reports dropped events")
+	case *events.RefUpdatedEvent:
 	case *events.ReviewerDeletedEvent:
 	default:
 		a.logger.Error("unknown event type", zap.String("event-type", event.GetType()))
