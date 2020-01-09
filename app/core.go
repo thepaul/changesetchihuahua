@@ -95,6 +95,7 @@ const (
 	ConfigItemInt
 	ConfigItemChannel
 	ConfigItemUserList
+	ConfigItemLink
 )
 
 type configItem struct {
@@ -104,7 +105,7 @@ type configItem struct {
 }
 
 var configItems = []configItem{
-	{Name: "gerrit-address", Description: "URL to your Gerrit server (e.g. `https://gerrit-review.googlesource.com/`)"},
+	{Name: "gerrit-address", Description: "URL to your Gerrit server (e.g. `https://gerrit-review.googlesource.com/`)", ItemType: ConfigItemLink},
 	{Name: "admin-ids", Description: "comma-separated list of chat IDs of admins", ItemType: ConfigItemUserList},
 	{Name: "remove-project-prefix", Description: "a common prefix on project names which can be removed if present before displaying in links (e.g., `myCompany/`)", ItemType: ConfigItemString},
 	{Name: "global-notify-channel", Description: "A channel to which all generally-applicable notifications should be sent", ItemType: ConfigItemChannel},
@@ -124,8 +125,6 @@ type App struct {
 
 	reporterLock sync.Mutex
 
-	notifyChannelID       string
-	globalReportChannelID string
 	lookupOnce            sync.Once
 
 	// a send is done on this channel when PeriodicGlobalReport may need to reread config
@@ -277,7 +276,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 		a.PersonalReports(ctx, time.Now())
 	case "!global-report":
 		logger.Info("admin requested unscheduled global report")
-		chanID := a.getReportChannelID()
+		chanID := a.persistentDB.JustGetConfig(ctx, "global-report-channel", "")
 		if chanID == "" {
 			return "No global report channel configured."
 		}
@@ -312,7 +311,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 			}
 			return fmt.Sprintf("%q => %q", key, curValue)
 		}
-		value := parts[2]
+		value := strings.Join(parts[2:], " ")
 		err := a.setConfigItem(ctx, key, value)
 		if err != nil {
 			return fmt.Sprintf("failed to set %q: %v", key, err)
@@ -382,8 +381,10 @@ func (a *App) setConfigItem(ctx context.Context, key, value string) error {
 	case ConfigItemChannel:
 		value = a.chat.UnwrapChannelLink(value)
 		if value == "" {
-			return errs.New("specify channels by letting the Slack client link them")
+			return errs.New("specify channels by letting the chat client link them")
 		}
+	case ConfigItemLink:
+		value = a.chat.UnwrapLink(value)
 	case ConfigItemUserList:
 		action := "replace"
 		if strings.HasPrefix(value, "+") {
@@ -403,7 +404,7 @@ func (a *App) setConfigItem(ctx context.Context, key, value string) error {
 			}
 			userID := a.chat.UnwrapUserLink(field)
 			if userID == "" {
-				return errs.New("specify users by letting the Slack client link them")
+				return errs.New("specify users by letting the chat client link them")
 			}
 			userIDs = append(userIDs, userID)
 		}
@@ -827,7 +828,7 @@ func (a *App) notify(ctx context.Context, gerritUser *events.Account, message st
 }
 
 func (a *App) generalNotify(ctx context.Context, message string) {
-	chanID := a.getNotifyChannelID()
+	chanID := a.persistentDB.JustGetConfig(ctx, "global-notify-channel", "")
 	if chanID == "" {
 		// no global notify channel configured.
 		return
@@ -839,50 +840,6 @@ func (a *App) generalNotify(ctx context.Context, message string) {
 			zap.String("channel-id", chanID),
 			zap.String("message", message))
 	}
-}
-
-const startLookupsTimeout = 10 * time.Minute
-
-func (a *App) doStartTimeLookups() {
-	a.lookupOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), startLookupsTimeout)
-		defer cancel()
-
-		var wg waitGroup
-		globalNotifyChannel := a.persistentDB.JustGetConfig(ctx, "global-notify-channel", "")
-		if globalNotifyChannel != "" {
-			wg.Go(func() {
-				chanID, err := a.chat.LookupChannelByName(ctx, globalNotifyChannel)
-				if err != nil {
-					a.logger.Error("could not look up notify channel in chat system", zap.String("channel-name", globalNotifyChannel), zap.Error(err))
-				} else {
-					a.notifyChannelID = chanID
-				}
-			})
-		}
-		globalReportChannel := a.persistentDB.JustGetConfig(ctx, "global-report-channel", "")
-		if globalReportChannel != "" {
-			wg.Go(func() {
-				chanID, err := a.chat.LookupChannelByName(ctx, globalReportChannel)
-				if err != nil {
-					a.logger.Error("could not look up global report channel in chat system", zap.String("channel-name", globalReportChannel), zap.Error(err))
-				} else {
-					a.globalReportChannelID = chanID
-				}
-			})
-		}
-		wg.Wait()
-	})
-}
-
-func (a *App) getNotifyChannelID() string {
-	a.doStartTimeLookups()
-	return a.notifyChannelID
-}
-
-func (a *App) getReportChannelID() string {
-	a.doStartTimeLookups()
-	return a.globalReportChannelID
 }
 
 func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string {
@@ -921,7 +878,7 @@ func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string
 }
 
 func (a *App) PeriodicGlobalReport(ctx context.Context, getTime func() time.Time) error {
-	chanID := a.getReportChannelID()
+	chanID := a.persistentDB.JustGetConfig(ctx, "global-report-channel", "")
 	if chanID == "" {
 		// no global report configured
 		return nil

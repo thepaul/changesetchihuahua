@@ -346,13 +346,23 @@ func (s *slackInterface) UnwrapUserLink(userLink string) string {
 
 func (s *slackInterface) UnwrapChannelLink(channelLink string) string {
 	if len(channelLink) > 3 && channelLink[0] == '<' && channelLink[1] == '#' && channelLink[len(channelLink)-1] == '>' {
-		return channelLink[2 : len(channelLink)-1]
+		channelLink = channelLink[2 : len(channelLink)-1]
+		if pos := strings.Index(channelLink, "|"); pos >= 0 {
+			channelLink = channelLink[0:pos]
+		}
+		return channelLink
 	}
 	return ""
 }
 
 func (s *slackInterface) UnwrapLink(link string) string {
-	return strings.Trim(link, "<>")
+	if link[0] == '<' && link[len(link)-1] == '>' {
+		link = link[1:len(link)-1]
+		if pos := strings.Index(link, "|"); pos >= 0 {
+			link = link[0:pos]
+		}
+	}
+	return link
 }
 
 func GetOAuthToken(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *slack.OAuthResponse, err error) {
