@@ -82,10 +82,7 @@ func (ws *uiWebState) maybeOAuthRedirect(w http.ResponseWriter, r *http.Request)
 }
 
 func (ws *uiWebState) gerritEvent(w http.ResponseWriter, r *http.Request) {
-	urlPath := r.URL.Path
-	if strings.HasPrefix(urlPath, "/gerrit/") {
-		urlPath = urlPath[len("/gerrit/"):]
-	}
+	urlPath := strings.TrimPrefix(r.URL.Path, "/gerrit/")
 	pathParts := strings.SplitN(urlPath, "/", 2)
 	teamID := pathParts[0]
 

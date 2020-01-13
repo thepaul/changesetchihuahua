@@ -146,8 +146,6 @@ type App struct {
 
 	reporterLock sync.Mutex
 
-	lookupOnce sync.Once
-
 	// a send is done on this channel when PeriodicGlobalReport may need to reread config
 	reconfigureChannel chan struct{}
 
