@@ -42,8 +42,8 @@ const (
 	gerritQueryPageSize = 100
 	globalReportMaxSize = 100
 
-	workingDayStartHour = 0  // 9
-	workingDayEndHour   = 24 // 17
+	workingDayStartHour = 9
+	workingDayEndHour   = 17
 )
 
 // ChatSystem abstracts interaction with an instant-message chat system, so that this doesn't
@@ -1310,8 +1310,15 @@ func prettyTimeDelta(delta time.Duration) string {
 
 func (a *App) isGoodTimeForReport(ctx context.Context, _ *gerrit.AccountInfo, _ ChatUser, t time.Time) bool {
 	hour := t.Hour()
+	day := t.Weekday()
+	if day == time.Saturday || day == time.Sunday {
+		return false
+	}
+	if hour < workingDayStartHour || hour >= workingDayEndHour {
+		return false
+	}
 	personalReportHour := a.persistentDB.JustGetConfigInt(ctx, "personal-report-hour", defaultPersonalReportHour)
-	return hour >= personalReportHour && hour >= workingDayStartHour && hour < workingDayEndHour
+	return hour >= personalReportHour
 }
 
 func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername string) ([]gerrit.ChangeInfo, error) {
