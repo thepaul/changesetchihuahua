@@ -64,6 +64,7 @@ type ChatSystem interface {
 
 	FormatBold(msg string) string
 	FormatItalic(msg string) string
+	FormatBlockQuote(msg string) string
 	FormatChangeLink(project string, number int, url, subject string) string
 	FormatChannelLink(channelID string) string
 	FormatUserLink(chatID string) string
@@ -527,7 +528,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	comment = strings.TrimSpace(comment)
 	// and if it's still longer than a single line, prepend a newline so it's easier to read
 	if strings.Contains(comment, "\n") {
-		comment = "\n" + comment
+		comment = "\n" + a.chat.FormatBlockQuote(comment)
 	}
 
 	allInline, newInline, err := a.getNewInlineComments(ctx, change.ID, strconv.Itoa(patchSet.Number), author.Username, eventTime.Add(-*inlineCommentMaxAge))
@@ -550,11 +551,15 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	}
 	newInlineCommentsSorted := sortInlineComments(allInline, newInline)
 	for _, commentInfo := range newInlineCommentsSorted {
+		message := commentInfo.Message
+		if strings.Contains(message, "\n") {
+			message = "\n" + a.chat.FormatBlockQuote(message)
+		}
 		// add to notification message for change owner
 		if owner.Username != author.Username {
 			tellChangeOwner += fmt.Sprintf("\n%s: %s",
 				a.formatSourceLink(change.URL, patchSet.Number, commentInfo),
-				commentInfo.Message)
+				message)
 		}
 		// notify prior thread participants
 		inlineNotified := map[string]struct{}{author.Username: {}, owner.Username: {}}
@@ -562,7 +567,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 		for priorOk {
 			if _, ok := inlineNotified[priorComment.Author.Username]; !ok {
 				inlineNotified[priorComment.Author.Username] = struct{}{}
-				msg := fmt.Sprintf("%s replied to a thread on %s: %s", commenterLink, changeLink, commentInfo.Message)
+				msg := fmt.Sprintf("%s replied to a thread on %s: %s", commenterLink, changeLink, message)
 				wg.Go(func() {
 					a.notify(ctx, accountFromAccountInfo(&priorComment.Author), msg)
 				})

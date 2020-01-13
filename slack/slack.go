@@ -321,6 +321,11 @@ func (s *slackInterface) FormatItalic(msg string) string {
 	return "_" + msg + "_"
 }
 
+func (s *slackInterface) FormatBlockQuote(msg string) string {
+	lines := strings.Split(msg, "\n")
+	return "> " + strings.Join(lines, "\n> ")
+}
+
 func (s *slackInterface) FormatChangeLink(project string, number int, url, subject string) string {
 	return fmt.Sprintf("[%s@%d] %s", escapeText(project), number, s.FormatLink(url, subject))
 }
