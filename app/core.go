@@ -643,12 +643,18 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	var tellReviewers string
 
 	var withComments string
-	if isMultiline {
-		withComments = "\n"
-	} else {
-		withComments = " "
+	if len(newInline) > 0 {
+		if isMultiline {
+			withComments = "\n"
+		} else {
+			withComments = " "
+		}
+		plural := ""
+		if len(newInline) != 1 {
+			plural = "s"
+		}
+		withComments += a.fmt.FormatItalic("(with " + a.maybeLink(topCommentLink, fmt.Sprintf("%d inline comment%s", len(newInline), plural)) + ")")
 	}
-	withComments += a.fmt.FormatItalic("(with " + a.maybeLink(topCommentLink, fmt.Sprintf("%d inline comments", len(newInline))) + ")")
 
 	tellNotifyChannel = fmt.Sprintf("%s %s %s patchset %d: %s%s", author.Name, a.maybeLink(topCommentLink, "commented on"), changeLink, patchSet.Number, comment, withComments)
 
