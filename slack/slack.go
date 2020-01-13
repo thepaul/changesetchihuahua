@@ -313,63 +313,6 @@ func (s *slackInterface) GetUserPresence(ctx context.Context, chatID string) (*s
 	return s.api.GetUserPresenceContext(ctx, chatID)
 }
 
-func (s *slackInterface) FormatBold(msg string) string {
-	return "*" + msg + "*"
-}
-
-func (s *slackInterface) FormatItalic(msg string) string {
-	return "_" + msg + "_"
-}
-
-func (s *slackInterface) FormatBlockQuote(msg string) string {
-	lines := strings.Split(msg, "\n")
-	return "> " + strings.Join(lines, "\n> ")
-}
-
-func (s *slackInterface) FormatChangeLink(project string, number int, url, subject string) string {
-	return fmt.Sprintf("[%s@%d] %s", escapeText(project), number, s.FormatLink(url, subject))
-}
-
-func (s *slackInterface) FormatUserLink(chatID string) string {
-	return fmt.Sprintf("<@%s>", chatID)
-}
-
-func (s *slackInterface) FormatChannelLink(channelID string) string {
-	return fmt.Sprintf("<#%s>", channelID)
-}
-
-func (s *slackInterface) FormatLink(url, text string) string {
-	return fmt.Sprintf("<%s|%s>", url, escapeText(text))
-}
-
-func (s *slackInterface) UnwrapUserLink(userLink string) string {
-	if len(userLink) > 3 && userLink[0] == '<' && userLink[1] == '@' && userLink[len(userLink)-1] == '>' {
-		return userLink[2 : len(userLink)-1]
-	}
-	return ""
-}
-
-func (s *slackInterface) UnwrapChannelLink(channelLink string) string {
-	if len(channelLink) > 3 && channelLink[0] == '<' && channelLink[1] == '#' && channelLink[len(channelLink)-1] == '>' {
-		channelLink = channelLink[2 : len(channelLink)-1]
-		if pos := strings.Index(channelLink, "|"); pos >= 0 {
-			channelLink = channelLink[0:pos]
-		}
-		return channelLink
-	}
-	return ""
-}
-
-func (s *slackInterface) UnwrapLink(link string) string {
-	if link[0] == '<' && link[len(link)-1] == '>' {
-		link = link[1:len(link)-1]
-		if pos := strings.Index(link, "|"); pos >= 0 {
-			link = link[0:pos]
-		}
-	}
-	return link
-}
-
 func GetOAuthToken(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *slack.OAuthResponse, err error) {
 	return slack.GetOAuthResponseContext(ctx, http.DefaultClient, clientID, clientSecret, code, redirectURI)
 }
@@ -440,6 +383,65 @@ type OAuthV2Response struct {
 
 func escapeText(t string) string {
 	return slackutilsx.EscapeMessage(t)
+}
+
+type Formatter struct {}
+
+func (f *Formatter) FormatBold(msg string) string {
+	return "*" + msg + "*"
+}
+
+func (f *Formatter) FormatItalic(msg string) string {
+	return "_" + msg + "_"
+}
+
+func (f *Formatter) FormatBlockQuote(msg string) string {
+	lines := strings.Split(msg, "\n")
+	return "> " + strings.Join(lines, "\n> ")
+}
+
+func (f *Formatter) FormatChangeLink(project string, number int, url, subject string) string {
+	return fmt.Sprintf("[%s@%d] %s", escapeText(project), number, f.FormatLink(url, subject))
+}
+
+func (f *Formatter) FormatUserLink(chatID string) string {
+	return fmt.Sprintf("<@%s>", chatID)
+}
+
+func (f *Formatter) FormatChannelLink(channelID string) string {
+	return fmt.Sprintf("<#%s>", channelID)
+}
+
+func (f *Formatter) FormatLink(url, text string) string {
+	return fmt.Sprintf("<%s|%s>", url, escapeText(text))
+}
+
+func (f *Formatter) UnwrapUserLink(userLink string) string {
+	if len(userLink) > 3 && userLink[0] == '<' && userLink[1] == '@' && userLink[len(userLink)-1] == '>' {
+		return userLink[2 : len(userLink)-1]
+	}
+	return ""
+}
+
+func (f *Formatter) UnwrapChannelLink(channelLink string) string {
+	if len(channelLink) > 3 && channelLink[0] == '<' && channelLink[1] == '#' && channelLink[len(channelLink)-1] == '>' {
+		channelLink = channelLink[2 : len(channelLink)-1]
+		if pos := strings.Index(channelLink, "|"); pos >= 0 {
+			channelLink = channelLink[0:pos]
+		}
+		return channelLink
+	}
+	return ""
+}
+
+func (f *Formatter) UnwrapLink(link string) string {
+	if link[0] == '<' && link[len(link)-1] == '>' {
+		link = link[1:len(link)-1]
+		if pos := strings.Index(link, "|"); pos >= 0 {
+			link = link[0:pos]
+		}
+	}
+	return link
 }
 
 // MessageHandle provides a handle to a Slack message, which can be used to change

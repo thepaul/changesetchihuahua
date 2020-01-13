@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/jtolds/changesetchihuahua/app"
+	"github.com/jtolds/changesetchihuahua/gerrit"
 	"github.com/jtolds/changesetchihuahua/gerrit/events"
 	"github.com/jtolds/changesetchihuahua/slack"
 )
@@ -42,6 +43,12 @@ type Team struct {
 	errGroup  errgroup.Group
 	teamApp   *app.App
 	slackConn slack.EventedChatSystem
+}
+
+type vanillaGerritConnector struct {}
+
+func (v vanillaGerritConnector) OpenGerrit(ctx context.Context, address string) (app.GerritClient, error) {
+	return gerrit.OpenClient(ctx, address)
 }
 
 func NewGovernor(ctx context.Context, logger *zap.Logger, teamFile string) (*Governor, error) {
@@ -171,7 +178,7 @@ func (g *Governor) addTeam(teamID, setupData string) (team *Team, err error) {
 	if err != nil {
 		return nil, errs.New("could not open db: %v", err)
 	}
-	thisApp := app.New(ctx, teamLogger, slackConn, persistentDB)
+	thisApp := app.New(ctx, teamLogger, slackConn, &slack.Formatter{}, persistentDB, vanillaGerritConnector{})
 
 	team = &Team{
 		id:        teamID,
