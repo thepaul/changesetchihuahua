@@ -100,9 +100,9 @@ const (
 )
 
 type configItem struct {
-	Name string
+	Name        string
 	Description string
-	ItemType configItemType
+	ItemType    configItemType
 }
 
 var configItems = []configItem{
@@ -126,7 +126,7 @@ type App struct {
 
 	reporterLock sync.Mutex
 
-	lookupOnce            sync.Once
+	lookupOnce sync.Once
 
 	// a send is done on this channel when PeriodicGlobalReport may need to reread config
 	reconfigureChannel chan struct{}
@@ -318,14 +318,6 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 		if err != nil {
 			return fmt.Sprintf("failed to set %q: %v", key, err)
 		}
-	case "!gerrit-server":
-		if len(parts) != 2 {
-			return "bad !gerrit-server usage [!gerrit-server <URL>]"
-		}
-		addr := a.chat.UnwrapLink(parts[1])
-		if err := a.configureGerritServer(ctx, addr); err != nil {
-			return "Failure: " + err.Error()
-		}
 	default:
 		return "I don't understand that command."
 	}
@@ -455,9 +447,7 @@ func (a *App) configureGerritServer(ctx context.Context, gerritAddress string) e
 
 func (a *App) isAdminUser(ctx context.Context, chatID string) bool {
 	admins := a.persistentDB.JustGetConfig(ctx, "admin-ids", "")
-	a.logger.Info("got admin-ids", zap.String("admin-ids", admins))
 	adminSet := parseUserSet(admins)
-	a.logger.Info("parsed admin-ids", zap.Any("admin-ids", adminSet))
 	_, ok := adminSet[chatID]
 	return ok
 }
@@ -479,7 +469,7 @@ func (a *App) getNewInlineComments(ctx context.Context, changeID, patchSetID, us
 			commentInfoCopy := commentInfo
 			commentInfoCopy.Path = filePath
 			allInline[commentInfo.ID] = &commentInfoCopy
-			if commentInfo.Author.Username == username || commentInfo.Author.Username == "thepaul" {
+			if commentInfo.Author.Username == username {
 				updatedTime := gerrit.ParseTimestamp(commentInfo.Updated)
 				if updatedTime.After(cutOffTime) {
 					newInline[commentInfo.ID] = updatedTime
@@ -494,7 +484,7 @@ func (a *App) getNewInlineComments(ctx context.Context, changeID, patchSetID, us
 }
 
 var (
-	commentsXCommentsRegex = regexp.MustCompile(`\s*\n\n\([0-9]+ comments?\)\s*$`)
+	commentsXCommentsRegex = regexp.MustCompile(`(^|\n\n)\([0-9]+ comments?\)\s*$`)
 	commentsPatchSetRegex  = regexp.MustCompile(`^\s*Patch Set [0-9]+:\s*`)
 )
 
