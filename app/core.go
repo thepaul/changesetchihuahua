@@ -910,7 +910,10 @@ func (a *App) nextGlobalReportTime(ctx context.Context, now time.Time) time.Dura
 	globalReportHour := a.persistentDB.JustGetConfigInt(ctx, "global-report-hour", defaultGlobalReportHour)
 	nextReport := time.Date(now.Year(), now.Month(), now.Day(), globalReportHour, 0, 0, 0, time.UTC)
 	if now.After(nextReport) {
-		nextReport = time.Date(now.Year(), now.Month(), now.Day()+1, globalReportHour, 0, 0, 0, time.UTC)
+		nextReport = nextReport.AddDate(0, 0, 1)
+	}
+	for nextReport.Weekday() == time.Saturday || nextReport.Weekday() == time.Sunday {
+		nextReport = nextReport.AddDate(0, 0, 1)
 	}
 	return nextReport.Sub(now)
 }
