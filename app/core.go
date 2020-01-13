@@ -255,6 +255,8 @@ func (a *App) GerritEvent(ctx context.Context, event events.GerritEvent) {
 		a.PatchSetCreated(ctx, ev.Uploader, ev.Change, ev.PatchSet)
 	case *events.ChangeAbandonedEvent:
 		a.ChangeAbandoned(ctx, ev.Abandoner, ev.Change, ev.Reason)
+	case *events.ChangeRestoredEvent:
+		a.ChangeRestored(ctx, ev.Restorer, ev.Change, ev.PatchSet, ev.Reason)
 	case *events.ChangeMergedEvent:
 		a.ChangeMerged(ctx, ev.Submitter, ev.Change, ev.PatchSet)
 	case *events.AssigneeChangedEvent:
@@ -900,6 +902,23 @@ func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, cha
 	}
 	a.generalNotify(ctx, msg)
 	a.notifyAllReviewers(ctx, change.ID, msg, []string{abandoner.Username, change.Owner.Username})
+}
+
+// ChangeRestored is called when we receive a Gerrit change-restored event.
+func (a *App) ChangeRestored(ctx context.Context, restorer events.Account, change events.Change, patchSet events.PatchSet, reason string) {
+	restorerLink := a.prepareUserLink(ctx, &restorer)
+	changeLink := a.formatChangeLink(&change)
+	if restorer.Username != change.Owner.Username {
+		a.notify(ctx, &change.Owner, fmt.Sprintf(
+			"%s restored your change %s using patchset #%d with the message: %s",
+			restorerLink, changeLink, patchSet.Number, reason))
+	}
+	reviewerMsg := fmt.Sprintf("%s restored change %s using patchset #%d with the message: %s",
+		restorerLink, changeLink, patchSet.Number, reason)
+	a.notifyAllReviewers(ctx, change.ID, reviewerMsg, []string{restorer.Username, change.Owner.Username})
+	generalMsg := fmt.Sprintf("%s restored change %s using patchset #%d with the message: %s",
+		restorer.Name, changeLink, patchSet.Number, reason)
+	a.generalNotify(ctx, generalMsg)
 }
 
 // ChangeMerged is called when we receive a Gerrit change-merged event.
