@@ -620,7 +620,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	changeLink := a.formatChangeLink(&change)
 
 	var topCommentLink string
-	topCommentID := a.findReviewMessageID(ctx, change.ID, patchSet.Number, author.Username, comment, eventTime)
+	topCommentID := a.findReviewMessageID(ctx, change.BestID(), patchSet.Number, author.Username, comment, eventTime)
 	if topCommentLink != "" {
 		topCommentLink = fmt.Sprintf("%s#message-%s", changeLink, topCommentID)
 	}
@@ -638,9 +638,9 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	}
 
 	// get all inline comments and identify which ones are new
-	allInline, newInline, err := a.getNewInlineComments(ctx, change.ID, strconv.Itoa(patchSet.Number), author.Username, eventTime.Add(-*inlineCommentMaxAge))
+	allInline, newInline, err := a.getNewInlineComments(ctx, change.BestID(), strconv.Itoa(patchSet.Number), author.Username, eventTime.Add(-*inlineCommentMaxAge))
 	if err != nil {
-		a.logger.Error("could not query inline comments via API", zap.Error(err), zap.String("change-id", change.ID), zap.Int("patch-set", patchSet.Number))
+		a.logger.Error("could not query inline comments via API", zap.Error(err), zap.String("change-id", change.BestID()), zap.Int("patch-set", patchSet.Number))
 		// fallback: use empty maps; assume there just aren't any inline comments to deal with
 	}
 
@@ -713,7 +713,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	})
 	wg.Go(func() {
 		if tellReviewers != "" {
-			a.notifyAllReviewers(ctx, change.ID, tellReviewers, []string{author.Username, change.Owner.Username})
+			a.notifyAllReviewers(ctx, change.BestID(), tellReviewers, []string{author.Username, change.Owner.Username})
 		}
 		// notify thread participants after reviewers; since thread participants are likely
 		// reviewers themselves, these thread updates will make most sense in the context
@@ -774,11 +774,11 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 	// don't need to notify. and if it wasn't, we want to say who did it in the notification.
 	// Unfortunately, the reviewer-added event doesn't carry that information. We turn to the
 	// Gerrit API again.
-	reviewerUpdate, err := a.findReviewerUpdateRecord(ctx, change.ID, reviewer.Username, eventTime)
+	reviewerUpdate, err := a.findReviewerUpdateRecord(ctx, change.BestID(), reviewer.Username, eventTime)
 
 	if err != nil {
 		// the records in Gerrit are alarmingly different from what the event told us. oh well?
-		a.logger.Error("could not identify reviewer update entity via API", zap.Error(err), zap.String("change-id", change.ID), zap.String("reviewer", reviewer.Username), zap.Time("event-time", eventTime))
+		a.logger.Error("could not identify reviewer update entity via API", zap.Error(err), zap.String("change-id", change.BestID()), zap.String("reviewer", reviewer.Username), zap.Time("event-time", eventTime))
 		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer or CC for %s", changeLink))
 		a.generalNotify(ctx, fmt.Sprintf("%s was added as a reviewer or CC for %s", reviewer.Name, changeLink))
 		return
@@ -830,10 +830,10 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 
 	// events.Change does have an AllReviewers field, but apparently it's not populated for
 	// patchset-created events. It's API time
-	changeInfo, err := a.getGerritClient().GetPatchSetInfo(ctx, change.ID, strconv.Itoa(patchSet.Number))
+	changeInfo, err := a.getGerritClient().GetPatchSetInfo(ctx, change.BestID(), strconv.Itoa(patchSet.Number))
 	if err != nil {
 		a.logger.Error("could not fetch patchset info for change, so can not notify reviewers",
-			zap.Error(err), zap.String("change-id", change.ID))
+			zap.Error(err), zap.String("change-id", change.BestID()))
 		// changeInfo will be an empty gerrit.ChangeInfo record, which should work below,
 		// using REWORK as a default change type and with an empty reviewers map. Continue
 		// for the sake of the general notification.
@@ -908,7 +908,7 @@ func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, cha
 	}
 	reviewerMsg := fmt.Sprintf("%s marked change %s as abandoned with the message: %s",
 		abandonerLink, changeLink, reason)
-	a.notifyAllReviewers(ctx, change.ID, reviewerMsg, []string{abandoner.Username, change.Owner.Username})
+	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{abandoner.Username, change.Owner.Username})
 	generalMsg := fmt.Sprintf("%s marked change %s as abandoned with the message: %s",
 		abandoner.Name, changeLink, reason)
 	a.generalNotify(ctx, generalMsg)
@@ -925,7 +925,7 @@ func (a *App) ChangeRestored(ctx context.Context, restorer events.Account, chang
 	}
 	reviewerMsg := fmt.Sprintf("%s restored change %s using patchset #%d with the message: %s",
 		restorerLink, changeLink, patchSet.Number, reason)
-	a.notifyAllReviewers(ctx, change.ID, reviewerMsg, []string{restorer.Username, change.Owner.Username})
+	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{restorer.Username, change.Owner.Username})
 	generalMsg := fmt.Sprintf("%s restored change %s using patchset #%d with the message: %s",
 		restorer.Name, changeLink, patchSet.Number, reason)
 	a.generalNotify(ctx, generalMsg)
@@ -942,7 +942,7 @@ func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change
 	}
 	reviewerMsg := fmt.Sprintf("%s merged patchset #%d of change %s.",
 		submitterLink, patchSet.Number, changeLink)
-	a.notifyAllReviewers(ctx, change.ID, reviewerMsg, []string{submitter.Username, change.Owner.Username})
+	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{submitter.Username, change.Owner.Username})
 	generalMsg := fmt.Sprintf("%s merged patchset #%d of change %s.",
 		submitter.Name, patchSet.Number, changeLink)
 	a.generalNotify(ctx, generalMsg)
