@@ -899,13 +899,19 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 
 // ChangeAbandoned is called when we receive a Gerrit change-abandoned event.
 func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, change events.Change, reason string) {
-	msg := fmt.Sprintf("%s marked change %s as abandoned with the message: %s",
-		a.prepareUserLink(ctx, &abandoner), a.formatChangeLink(&change), reason)
+	abandonerLink := a.prepareUserLink(ctx, &abandoner)
+	changeLink := a.formatChangeLink(&change)
 	if abandoner.Username != change.Owner.Username {
-		a.notify(ctx, &change.Owner, msg)
+		a.notify(ctx, &change.Owner, fmt.Sprintf(
+			"%s marked your change %s as abandoned with the message: %s",
+			abandonerLink, changeLink, reason))
 	}
-	a.generalNotify(ctx, msg)
-	a.notifyAllReviewers(ctx, change.ID, msg, []string{abandoner.Username, change.Owner.Username})
+	reviewerMsg := fmt.Sprintf("%s marked change %s as abandoned with the message: %s",
+		abandonerLink, changeLink, reason)
+	a.notifyAllReviewers(ctx, change.ID, reviewerMsg, []string{abandoner.Username, change.Owner.Username})
+	generalMsg := fmt.Sprintf("%s marked change %s as abandoned with the message: %s",
+		abandoner.Name, changeLink, reason)
+	a.generalNotify(ctx, generalMsg)
 }
 
 // ChangeRestored is called when we receive a Gerrit change-restored event.
@@ -927,12 +933,19 @@ func (a *App) ChangeRestored(ctx context.Context, restorer events.Account, chang
 
 // ChangeMerged is called when we receive a Gerrit change-merged event.
 func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change events.Change, patchSet events.PatchSet) {
-	msg := fmt.Sprintf("%s merged patchset #%d of change %s.", a.prepareUserLink(ctx, &submitter), patchSet.Number, a.formatChangeLink(&change))
+	submitterLink := a.prepareUserLink(ctx, &submitter)
+	changeLink := a.formatChangeLink(&change)
 	if submitter.Username != change.Owner.Username {
-		a.notify(ctx, &change.Owner, msg)
+		a.notify(ctx, &change.Owner, fmt.Sprintf(
+			"%s merged patchset #%d of your change %s.",
+			submitterLink, patchSet.Number, changeLink))
 	}
-	a.generalNotify(ctx, msg)
-	a.notifyAllReviewers(ctx, change.ID, msg, []string{submitter.Username, change.Owner.Username})
+	reviewerMsg := fmt.Sprintf("%s merged patchset #%d of change %s.",
+		submitterLink, patchSet.Number, changeLink)
+	a.notifyAllReviewers(ctx, change.ID, reviewerMsg, []string{submitter.Username, change.Owner.Username})
+	generalMsg := fmt.Sprintf("%s merged patchset #%d of change %s.",
+		submitter.Name, patchSet.Number, changeLink)
+	a.generalNotify(ctx, generalMsg)
 }
 
 // TopicChanged is called when we receive a Gerrit topic-changed event.
