@@ -571,7 +571,7 @@ func (a *App) findReviewerUpdateRecord(ctx context.Context, changeID, reviewerUs
 func (a *App) pickBestMatchMessage(revisionNum int, authorUsername string, sentTime time.Time, topMessage string, messages []gerrit.ChangeMessageInfo) (*gerrit.ChangeMessageInfo, error) {
 	var matches []*gerrit.ChangeMessageInfo
 	for i, message := range messages {
-		if message.RevisionNumber == revisionNum && message.Author.Username != authorUsername && message.Message != topMessage {
+		if message.RevisionNumber == revisionNum && message.Author.Username == authorUsername && message.Message == topMessage {
 			matches = append(matches, &messages[i])
 		}
 	}
@@ -621,7 +621,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 
 	var topCommentLink string
 	topCommentID := a.findReviewMessageID(ctx, change.BestID(), patchSet.Number, author.Username, comment, eventTime)
-	if topCommentLink != "" {
+	if topCommentID != "" {
 		topCommentLink = fmt.Sprintf("%s#message-%s", changeLink, topCommentID)
 	}
 
