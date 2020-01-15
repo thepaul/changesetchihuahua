@@ -522,7 +522,7 @@ func (a *App) findReviewMessageID(ctx context.Context, changeID string, patchSet
 	}
 	thisMessage, err := a.pickBestMatchMessage(patchSetNumber, authorUsername, eventTime, content, reviewInfo.Messages)
 	if err != nil {
-		a.logger.Error("could not identify toplevel message from clues in gerrit event", zap.String("change-id", changeID), zap.Int("patch-set", patchSetNumber), zap.String("author", authorUsername), zap.Int("messages-found", len(reviewInfo.Messages)))
+		a.logger.Error("could not identify toplevel message from clues in gerrit event", zap.Error(err), zap.String("change-id", changeID), zap.Int("patch-set", patchSetNumber), zap.String("author", authorUsername), zap.String("content", content), zap.Int("messages-found", len(reviewInfo.Messages)))
 		// fallback: don't link to toplevel comment
 		return ""
 	}
