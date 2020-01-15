@@ -652,7 +652,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	if len(newInline) > 0 {
 		if isMultiline {
 			withComments = "\n"
-		} else {
+		} else if comment != "" {
 			withComments = " "
 		}
 		plural := ""
@@ -684,7 +684,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 		sourceLink := a.formatSourceLink(change.URL, patchSet.Number, commentInfo)
 		// add to notification message for change owner
 		if owner.Username != author.Username {
-			tellChangeOwner += fmt.Sprintf("\n%s: %s", sourceLink, message)
+			tellChangeOwner += fmt.Sprintf("\n* %s: %s", sourceLink, message)
 		}
 		// notify prior thread participants
 		inlineNotified := map[string]struct{}{author.Username: {}, owner.Username: {}}
