@@ -13,7 +13,7 @@ var (
 
 // MaxEventPayloadSize is the size of the largest event payload this system will allow. Larger
 // event payloads will result in errors and will not be processed.
-const MaxEventPayloadSize = 10*1024*1024
+const MaxEventPayloadSize = 10 * 1024 * 1024
 
 // GerritEvent is a common interface to various gerrit event structures.
 type GerritEvent interface {
@@ -72,6 +72,8 @@ func DecodeGerritEvent(eventJSON []byte) (GerritEvent, error) {
 		evStruct = &TopicChangedEvent{}
 	case "vote-deleted":
 		evStruct = &VoteDeletedEvent{}
+	case "wip-state-changed":
+		evStruct = &WipStateChangedEvent{}
 	default:
 		return nil, EventDecodingError.New("unrecognized event type %q", eventType.Type)
 	}
@@ -209,4 +211,13 @@ type VoteDeletedEvent struct {
 	Remover   Account
 	Approvals []Approval
 	Comment   string
+}
+
+// WipStateChangedEvent is sent when the wip state is changed on a changeset.
+type WipStateChangedEvent struct {
+	Base
+	Changer  Account
+	PatchSet PatchSet
+	Change   Change
+	RefName  string
 }

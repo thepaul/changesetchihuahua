@@ -70,6 +70,10 @@ type Change struct {
 	SubmitRecords []SubmitRecord
 	// AllReviewers is a list of reviewers added to this change.
 	AllReviewers []Account
+
+	// WIP indicates whether this change is currently marked as a Work In Progress.
+	// (This isn't in the docs; gleaned from received events.)
+	WIP bool
 }
 
 // Account is a Gerrit user account.

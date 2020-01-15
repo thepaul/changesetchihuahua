@@ -263,6 +263,8 @@ func (a *App) GerritEvent(ctx context.Context, event events.GerritEvent) {
 		a.AssigneeChanged(ctx, ev.Changer, ev.Change, ev.OldAssignee)
 	case *events.TopicChangedEvent:
 		a.TopicChanged(ctx, ev.Changer, ev.Change)
+	case *events.WipStateChangedEvent:
+		a.WipStateChanged(ctx, ev.Changer, ev.Change, ev.PatchSet)
 	case *events.DroppedOutputEvent:
 		a.logger.Warn("gerrit reports dropped events")
 	case *events.RefUpdatedEvent:
@@ -947,6 +949,23 @@ func (a *App) TopicChanged(ctx context.Context, changer events.Account, change e
 	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{changer.Username, change.Owner.Username})
 	generalMsg := fmt.Sprintf("%s changed the topic of changeset %s to %q.",
 		changer.Name, changeLink, change.Topic)
+	a.generalNotify(ctx, generalMsg)
+}
+
+// WipStateChanged is called when we receive a Gerrit topic-changed event.
+func (a *App) WipStateChanged(ctx context.Context, changer events.Account, change events.Change, _ events.PatchSet) {
+	changerLink := a.prepareUserLink(ctx, &changer)
+	changeLink := a.formatChangeLink(&change)
+	what := "as ready for review"
+	if change.WIP {
+		what = "as a Work In Progress"
+	}
+	if changer.Username != change.Owner.Username {
+		a.notify(ctx, &change.Owner, fmt.Sprintf("%s marked your change %s %s.", changerLink, changeLink, what))
+	}
+	reviewerMsg := fmt.Sprintf("%s marked change %s %s.", changerLink, changeLink, what)
+	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{changer.Username, change.Owner.Username})
+	generalMsg := fmt.Sprintf("%s marked change %s %s.", changer.Name, changeLink, what)
 	a.generalNotify(ctx, generalMsg)
 }
 
