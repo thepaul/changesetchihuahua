@@ -261,6 +261,8 @@ func (a *App) GerritEvent(ctx context.Context, event events.GerritEvent) {
 		a.ChangeMerged(ctx, ev.Submitter, ev.Change, ev.PatchSet)
 	case *events.AssigneeChangedEvent:
 		a.AssigneeChanged(ctx, ev.Changer, ev.Change, ev.OldAssignee)
+	case *events.TopicChangedEvent:
+		a.TopicChanged(ctx, ev.Changer, ev.Change)
 	case *events.DroppedOutputEvent:
 		a.logger.Warn("gerrit reports dropped events")
 	case *events.RefUpdatedEvent:
@@ -929,6 +931,23 @@ func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change
 	}
 	a.generalNotify(ctx, msg)
 	a.notifyAllReviewers(ctx, change.ID, msg, []string{submitter.Username, change.Owner.Username})
+}
+
+// TopicChanged is called when we receive a Gerrit topic-changed event.
+func (a *App) TopicChanged(ctx context.Context, changer events.Account, change events.Change) {
+	changerLink := a.prepareUserLink(ctx, &changer)
+	changeLink := a.formatChangeLink(&change)
+	if changer.Username != change.Owner.Username {
+		a.notify(ctx, &change.Owner, fmt.Sprintf(
+			"%s changed the topic of your change %s to %q.",
+			changerLink, changeLink, change.Topic))
+	}
+	reviewerMsg := fmt.Sprintf("%s changed the topic of changeset %s to %q.",
+		changerLink, changeLink, change.Topic)
+	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{changer.Username, change.Owner.Username})
+	generalMsg := fmt.Sprintf("%s changed the topic of changeset %s to %q.",
+		changer.Name, changeLink, change.Topic)
+	a.generalNotify(ctx, generalMsg)
 }
 
 // AssigneeChanged is called when we receive a Gerrit assignee-changed event.
