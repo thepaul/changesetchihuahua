@@ -25,8 +25,11 @@ func OpenClient(ctx context.Context, serverURL string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !strings.HasSuffix(urlObj.Path, "/") {
-		urlObj.Path += "/"
+	urlObj.Path = strings.TrimRight(urlObj.Path, "/") + "/"
+	if urlObj.RawPath == "" {
+		urlObj.RawPath = urlObj.Path
+	} else {
+		urlObj.RawPath = strings.TrimRight(urlObj.RawPath, "/") + "/"
 	}
 
 	client := &Client{
@@ -46,12 +49,20 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) URLForChange(change *ChangeInfo) string {
-	return c.makeURL(fmt.Sprintf("c/%s/+/%d", change.Project, change.Number), nil)
+	return c.makeURL(fmt.Sprintf("/c/%s/+/%d", url.PathEscape(change.Project), change.Number), nil)
 }
 
 func (c *Client) makeURL(path string, query url.Values) string {
+	path = strings.TrimLeft(path, "/")
 	myURL := *c.ServerURL // copy
-	myURL.Path += path
+	myURL.RawPath += path
+	decodedPath, err := url.PathUnescape(myURL.RawPath)
+	if err != nil {
+		// best effort
+		myURL.Path += path
+	} else {
+		myURL.Path = decodedPath
+	}
 	if query != nil {
 		if myURL.RawQuery == "" {
 			myURL.RawQuery = query.Encode()
@@ -108,7 +119,7 @@ func (c *Client) QueryChangesEx(ctx context.Context, queries []string, opts *Que
 	if opts.StartAt != 0 {
 		values.Set("S", strconv.Itoa(opts.StartAt))
 	}
-	resp, err := c.doGet(ctx, "changes/", values)
+	resp, err := c.doGet(ctx, "/changes/", values)
 	if err != nil {
 		return nil, false, errs.Wrap(err)
 	}
@@ -135,7 +146,7 @@ func (c *Client) GetChangeEx(ctx context.Context, changeID string, opts *QueryCh
 	if labels := opts.assembleLabels(); len(labels) > 0 {
 		values["o"] = labels
 	}
-	resp, err := c.doGet(ctx, "/changes/"+url.QueryEscape(changeID)+"/", values)
+	resp, err := c.doGet(ctx, "/changes/"+url.PathEscape(changeID)+"/", values)
 	if err != nil {
 		return changeInfo, err
 	}
@@ -147,7 +158,7 @@ func (c *Client) GetChangeEx(ctx context.Context, changeID string, opts *QueryCh
 }
 
 func (c *Client) GetChangeReviewers(ctx context.Context, changeID string) ([]ReviewerInfo, error) {
-	resp, err := c.doGet(ctx, "/changes/"+url.QueryEscape(changeID)+"/reviewers/", nil)
+	resp, err := c.doGet(ctx, "/changes/"+url.PathEscape(changeID)+"/reviewers/", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +172,7 @@ func (c *Client) GetChangeReviewers(ctx context.Context, changeID string) ([]Rev
 
 func (c *Client) GetPatchSetInfo(ctx context.Context, changeID, patchSetID string) (changeInfo ChangeInfo, err error) {
 	queryPath := fmt.Sprintf("/changes/%s/revisions/%s/review",
-		url.QueryEscape(changeID), url.QueryEscape(patchSetID))
+		url.PathEscape(changeID), url.PathEscape(patchSetID))
 	resp, err := c.doGet(ctx, queryPath, nil)
 	if err != nil {
 		return changeInfo, err
@@ -174,7 +185,7 @@ func (c *Client) GetPatchSetInfo(ctx context.Context, changeID, patchSetID strin
 }
 
 func (c *Client) ListChangeMessages(ctx context.Context, changeID string) ([]ChangeMessageInfo, error) {
-	resp, err := c.doGet(ctx, "/changes/"+changeID+"/messages", nil)
+	resp, err := c.doGet(ctx, fmt.Sprintf("/changes/%s/messages", url.PathEscape(changeID)), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +198,7 @@ func (c *Client) ListChangeMessages(ctx context.Context, changeID string) ([]Cha
 }
 
 func (c *Client) ListRevisionComments(ctx context.Context, changeID, revisionID string) (map[string][]CommentInfo, error) {
-	resp, err := c.doGet(ctx, "/changes/"+changeID+"/revisions/"+revisionID+"/comments/", nil)
+	resp, err := c.doGet(ctx, fmt.Sprintf("/changes/%s/revisions/%s/comments/", url.PathEscape(changeID), url.PathEscape(revisionID)), nil)
 	if err != nil {
 		return nil, err
 	}

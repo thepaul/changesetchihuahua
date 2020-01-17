@@ -622,7 +622,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	var topCommentLink string
 	topCommentID := a.findReviewMessageID(ctx, change.BestID(), patchSet.Number, author.Username, comment, eventTime)
 	if topCommentID != "" {
-		topCommentLink = fmt.Sprintf("%s#message-%s", changeLink, topCommentID)
+		topCommentLink = fmt.Sprintf("%s#message-%s", change.URL, topCommentID)
 	}
 
 	// strip off the "Patch Set X:"	bit at the top; we'll convey that piece of info separately.

@@ -2,7 +2,6 @@ package events
 
 import (
 	"math"
-	"net/url"
 	"strconv"
 	"time"
 )
@@ -81,7 +80,7 @@ type Change struct {
 // The bare Change-ID value is not always enough to identify a unique change. According to the
 // Gerrit docs, this is the best supported unique identifier, and others are deprecated.
 func (c *Change) BestID() string {
-	return url.QueryEscape(c.Project) + "~" + strconv.Itoa(c.Number)
+	return c.Project + "~" + strconv.Itoa(c.Number)
 }
 
 // Account is a Gerrit user account.
