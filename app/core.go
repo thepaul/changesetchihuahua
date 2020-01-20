@@ -741,6 +741,7 @@ func (a *App) JenkinsRobotCommentAdded(ctx context.Context, change events.Change
 		}
 	} else {
 		// no magic to do here; report as normal comment
+		a.logger.Debug("unexpected comment from jenkins robot user", zap.String("content", comment), zap.String("change", change.URL), zap.Int("patchset", patchSet.Number))
 		return false
 	}
 
