@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"flag"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,12 @@ import (
 
 //go:generate go-bindata -pkg app -prefix migrations -modtime 1574794364 -mode 420 -o migrations.go -ignore=/\. migrations/
 
+var (
+	prunePeriod       = flag.Duration("db-prune-period", time.Hour, "Time between persistent db prune jobs")
+	pruneTimeout      = flag.Duration("db-prune-timeout", 10*time.Minute, "Cancel any prune jobs that run longer than this amount of time")
+	buildLifetimeDays = flag.Int("build-lifetime-days", 7, "Builds on patchsets older than this many days will not have their announcements inline-annotated with new build statuses")
+)
+
 type PersistentDB struct {
 	logger *zap.Logger
 	db     *dbx.DB
@@ -30,6 +37,8 @@ type PersistentDB struct {
 
 	cacheLock sync.RWMutex
 	cache     map[string]string
+
+	pruneCancel context.CancelFunc
 }
 
 func NewPersistentDB(logger *zap.Logger, dbSource string) (*PersistentDB, error) {
@@ -37,11 +46,15 @@ func NewPersistentDB(logger *zap.Logger, dbSource string) (*PersistentDB, error)
 	if err != nil {
 		return nil, err
 	}
-	return &PersistentDB{
-		logger: logger,
-		db:     db,
-		cache:  make(map[string]string),
-	}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	pdb := &PersistentDB{
+		logger:      logger,
+		db:          db,
+		cache:       make(map[string]string),
+		pruneCancel: cancel,
+	}
+	go pdb.pruneJob(ctx)
+	return pdb, nil
 }
 
 func openPersistentDB(dbSource string) (*dbx.DB, string, error) {
@@ -103,7 +116,27 @@ func initializePersistentDB(logger *zap.Logger, dbSource string) (*dbx.DB, error
 }
 
 func (ud *PersistentDB) Close() error {
+	ud.pruneCancel()
 	return ud.db.Close()
+}
+
+func (ud *PersistentDB) pruneJob(ctx context.Context) {
+	ticker := time.NewTicker(*prunePeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t := <-ticker.C:
+			go func() {
+				jobCtx, cancel := context.WithTimeout(ctx, *pruneTimeout)
+				defer cancel()
+				if err := ud.Prune(jobCtx, t); err != nil {
+					ud.logger.Error("Prune job failed", zap.Error(err))
+				}
+			}()
+		}
+	}
 }
 
 func (ud *PersistentDB) LookupGerritUser(ctx context.Context, gerritUsername string) (*dbx.GerritUser, error) {
@@ -302,6 +335,17 @@ func (ud *PersistentDB) SetConfig(ctx context.Context, key, value string) error 
 
 func (ud *PersistentDB) SetConfigInt(ctx context.Context, key string, value int) error {
 	return ud.SetConfig(ctx, key, strconv.FormatInt(int64(value), 32))
+}
+
+func (ud *PersistentDB) Prune(ctx context.Context, now time.Time) error {
+	deleteInlineCommentsBefore := now.Add(-2 * *inlineCommentMaxAge)
+	_, err := ud.db.Delete_InlineComment_By_UpdatedAt_Less(ctx, dbx.InlineComment_UpdatedAt(deleteInlineCommentsBefore))
+	if err != nil {
+		return err
+	}
+	deletePatchsetAnnouncementsBefore := now.AddDate(0, 0, -*buildLifetimeDays)
+	_, err = ud.db.Delete_PatchsetAnnouncement_By_Ts_Less(ctx, dbx.PatchsetAnnouncement_Ts(deletePatchsetAnnouncementsBefore))
+	return err
 }
 
 // newMigrateLogWrapper is used to wrap a zap.Logger in a way that is usable
