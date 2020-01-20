@@ -321,6 +321,38 @@ func (s *slackInterface) GetUserPresence(ctx context.Context, chatID string) (*s
 	return s.api.GetUserPresenceContext(ctx, chatID)
 }
 
+func (s *slackInterface) InformBuildStarted(ctx context.Context, mh messages.MessageHandle, link string) error {
+	// do nothing for now- not clear we can do anything very useful here that isn't overly
+	// noisy for the users
+	return nil
+}
+
+func (s *slackInterface) InformBuildSuccess(ctx context.Context, mh messages.MessageHandle, link string) error {
+	mhObj, ok := mh.(*messageHandle)
+	if !ok {
+		return errs.New("given message handle is a %T, not a *messageHandle", mh)
+	}
+	return s.rtm.AddReactionContext(ctx, "white_check_mark", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+}
+
+func (s *slackInterface) InformBuildFailure(ctx context.Context, mh messages.MessageHandle, link string) error {
+	mhObj, ok := mh.(*messageHandle)
+	if !ok {
+		return errs.New("given message handle is a %T, not a *messageHandle", mh)
+	}
+	_, _, err := s.rtm.PostMessageContext(ctx, mhObj.Channel, slack.MsgOptionText("Build failure: " + link, false), slack.MsgOptionTS(mhObj.Timestamp))
+	reactionErr := s.rtm.AddReactionContext(ctx, "x", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+	return errs.Combine(err, reactionErr)
+}
+
+func (s *slackInterface) InformBuildAborted(ctx context.Context, mh messages.MessageHandle, link string) error {
+	mhObj, ok := mh.(*messageHandle)
+	if !ok {
+		return errs.New("given message handle is a %T, not a *messageHandle", mh)
+	}
+	return s.rtm.AddReactionContext(ctx, "no_entry_sign", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+}
+
 func GetOAuthToken(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *slack.OAuthResponse, err error) {
 	return slack.GetOAuthResponseContext(ctx, http.DefaultClient, clientID, clientSecret, code, redirectURI)
 }

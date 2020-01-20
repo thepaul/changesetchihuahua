@@ -30,6 +30,11 @@ type ChatSystem interface {
 	SendChannelNotification(ctx context.Context, chanID, message string) (MessageHandle, error)
 	SendChannelReport(ctx context.Context, chanID, title string, reportItems []string) (MessageHandle, error)
 
+	InformBuildStarted(ctx context.Context, announcement MessageHandle, link string) error
+	InformBuildSuccess(ctx context.Context, announcement MessageHandle, link string) error
+	InformBuildFailure(ctx context.Context, announcement MessageHandle, link string) error
+	InformBuildAborted(ctx context.Context, announcement MessageHandle, link string) error
+
 	UnmarshalMessageHandle(handleData string) (MessageHandle, error)
 }
 

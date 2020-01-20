@@ -75,6 +75,7 @@ var configItems = []configItem{
 	{Name: "global-report-hour", Description: "Hour (in 24-hour time) in UTC when the daily report will be sent to global-report-channel", ItemType: ConfigItemInt},
 	{Name: "personal-report-hour", Description: "Hour (in 24-hour time) in each user's local timezone when the daily review report should be sent, if they are online. If they are not online, the system will keep checking every hour during working hours.", ItemType: ConfigItemInt},
 	{Name: "work-needed-query", Description: "Gerrit query to use for determining change sets with work needed for the global report", ItemType: ConfigItemString},
+	{Name: "jenkins-robot-user", Description: "Gerrit robot user that will post updates from Jenkins. If provided, these will be parsed and changed to display in a more helpful way", ItemType: ConfigItemString},
 }
 
 type App struct {
@@ -562,6 +563,13 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 	commenterLink := a.prepareUserLink(ctx, &author)
 	changeLink := a.formatChangeLink(&change)
 
+	jenkinsRobot := a.persistentDB.JustGetConfig(ctx, "jenkins-robot-user", "")
+	if jenkinsRobot != "" && author.Username == jenkinsRobot {
+		if a.JenkinsRobotCommentAdded(ctx, change, patchSet, comment) {
+			return
+		}
+	}
+
 	var topCommentLink string
 	topCommentID := a.findReviewMessageID(ctx, change.BestID(), patchSet.Number, author.Username, comment, eventTime)
 	if topCommentID != "" {
@@ -707,6 +715,102 @@ func (b byLastUpdateTime) Less(i, j int) bool {
 	// these timestamps are strings, but they are rfc-3339 timestamps and are thus
 	// sortable without parsing.
 	return b[i].Updated < b[j].Updated
+}
+
+var (
+	buildStartedRegexp    = regexp.MustCompile(`^Patch Set [1-9][0-9]*:\n\n\s*Build Started\s+(https?:\S+)\s*$`)
+	buildSuccessfulRegexp = regexp.MustCompile(`^Patch Set [1-9][0-9]*:\s+[-_A-Za-z0-9 ]*\+[0-9]+\n\nBuild Successful\n\n(https?:\S+) : SUCCESS\s*$`)
+	buildFailedRegexp     = regexp.MustCompile(`^Patch Set [1-9][0-9]*:\s+[-_A-Za-z0-9 ]*-[0-9]+\n\nBuild Failed\n\n(https?:\S+) : (FAILURE|ABORTED)\s*$`)
+)
+
+func (a *App) JenkinsRobotCommentAdded(ctx context.Context, change events.Change, patchSet events.PatchSet, comment string) bool {
+	var link string
+	var msgType string
+	if subMatches := buildStartedRegexp.FindStringSubmatch(comment); subMatches != nil {
+		link = subMatches[1]
+		msgType = "start"
+	} else if subMatches = buildSuccessfulRegexp.FindStringSubmatch(comment); subMatches != nil {
+		link = subMatches[1]
+		msgType = "success"
+	} else if subMatches = buildFailedRegexp.FindStringSubmatch(comment); subMatches != nil {
+		link = subMatches[1]
+		if subMatches[2] == "ABORTED" {
+			msgType = "abort"
+		} else {
+			msgType = "fail"
+		}
+	} else {
+		// no magic to do here; report as normal comment
+		return false
+	}
+
+	logger := a.logger.With(zap.String("project", change.Project), zap.Int("change-number", change.Number), zap.Int("patchset-number", patchSet.Number), zap.String("jenkins-robot-msgtype", msgType), zap.String("build-link", link))
+
+	patchSetAnnouncements, err := a.persistentDB.GetPatchSetAnnouncements(ctx, change.Project, change.Number, patchSet.Number)
+	if err != nil {
+		logger.Error("could not locate patchset announcement", zap.Error(err))
+		// fallback: just let message get reported as normal
+		return false
+	}
+
+	linkTransformer := a.persistentDB.JustGetConfig(ctx, "jenkins-link-transformer", "")
+	if linkTransformer != "" {
+		newLink, err := applyStringTransformer(link, linkTransformer)
+		if err != nil {
+			a.logger.Info("failed to apply jenkins link transformer", zap.Error(err))
+		} else {
+			link = newLink
+		}
+	}
+
+	// we will send an actual notification only the change owner, patchset author, and
+	// patchset uploader (who are in many cases the same user). No need to bother the global
+	// channel or reviewers/CCs.
+	toNotify := map[events.Account]struct{}{change.Owner: {}, patchSet.Author: {}, patchSet.Uploader: {}}
+	changeLink := a.formatChangeLink(&change)
+	notifyMsg := ""
+
+	var informFunc func(ctx context.Context, mh messages.MessageHandle, link string) error
+	switch msgType {
+	case "start":
+		informFunc = a.chat.InformBuildStarted
+	case "success":
+		notifyMsg = fmt.Sprintf("Build for %s succeeded", changeLink)
+		informFunc = a.chat.InformBuildSuccess
+	case "fail":
+		notifyMsg = fmt.Sprintf("Build for %s failed", changeLink)
+		informFunc = a.chat.InformBuildFailure
+	case "abort":
+		notifyMsg = fmt.Sprintf("Build for %s was canceled", changeLink)
+		informFunc = a.chat.InformBuildAborted
+	default:
+		a.logger.Error("things are definitely broken. unrecognized msgType", zap.String("msgType", msgType))
+		return false
+	}
+
+	var wg waitGroup
+	for _, handleJSON := range patchSetAnnouncements {
+		announcement, err := a.chat.UnmarshalMessageHandle(handleJSON)
+		if err != nil {
+			a.logger.Error("failed to unmarshal message handle from JSON", zap.Error(err), zap.String("json", handleJSON))
+			continue
+		}
+		wg.Go(func() {
+			if err := informFunc(ctx, announcement, link); err != nil {
+				a.logger.Error("failed to inform of build status", zap.String("status", msgType), zap.Error(err))
+			}
+		})
+	}
+	if notifyMsg != "" {
+		for userToNotify := range toNotify {
+			userToNotify := userToNotify
+			wg.Go(func() {
+				a.notify(ctx, &userToNotify, notifyMsg)
+			})
+		}
+	}
+	wg.Wait()
+	return true
 }
 
 // ReviewerAdded is called when we receive a Gerrit reviewer-added event.
