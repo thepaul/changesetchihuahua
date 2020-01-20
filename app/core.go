@@ -758,16 +758,29 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 // PatchSetCreated is called when we receive a Gerrit patchset-created event.
 func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, change events.Change, patchSet events.PatchSet) {
 	var wg waitGroup
-	defer wg.Wait()
+
+	var announcements []messages.MessageHandle
+	var announcementsMutex sync.Mutex
+	gotHandle := func(mh messages.MessageHandle) {
+		if mh != nil {
+			announcementsMutex.Lock()
+			defer announcementsMutex.Unlock()
+			announcements = append(announcements, mh)
+		}
+	}
 
 	uploaderLink := a.prepareUserLink(ctx, &uploader)
 	changeLink := a.formatChangeLink(&change)
 
 	if uploader.Username != change.Owner.Username {
 		wg.Go(func() {
-			a.notify(ctx, &change.Owner,
-				fmt.Sprintf("%s uploaded a new patchset #%d on your change %s",
-					uploaderLink, patchSet.Number, changeLink))
+			ownerChatID := a.lookupGerritUser(ctx, &change.Owner)
+			if ownerChatID != "" {
+				handle := a.notify(ctx, &change.Owner,
+					fmt.Sprintf("%s uploaded a new patchset #%d on your change %s",
+						uploaderLink, patchSet.Number, changeLink))
+				gotHandle(handle)
+			}
 		})
 	}
 
@@ -828,7 +841,8 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 				haveNotified[reviewer.Username] = struct{}{}
 				reviewerInfo := accountFromAccountInfo(&reviewer)
 				wg.Go(func() {
-					a.notify(ctx, reviewerInfo, useMsg)
+					handle := a.notify(ctx, reviewerInfo, useMsg)
+					gotHandle(handle)
 				})
 			}
 		}
@@ -836,8 +850,32 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 
 	// and, finally, send the general notification
 	wg.Go(func() {
-		a.generalNotify(ctx, generalMsg)
+		handle := a.generalNotify(ctx, generalMsg)
+		gotHandle(handle)
 	})
+	wg.Wait()
+
+	// make note of where we sent these new patchset announcements, so that we can later
+	// annotate them with build information if available
+	if len(announcements) > 0 {
+		a.recordPatchSetAnnouncements(ctx, change.Project, change.Number, patchSet.Number, announcements)
+	}
+}
+
+func (a *App) recordPatchSetAnnouncements(ctx context.Context, project string, changeNum, patchSetNum int, announcements []messages.MessageHandle) {
+	announcementJSONs := make([]string, len(announcements))
+	for i, ann := range announcements {
+		annJSON, err := ann.MarshalJSON()
+		if err != nil {
+			a.logger.Error("could not marshal MessageHandle to JSON", zap.Error(err), zap.Any("message-handle", ann))
+			continue
+		}
+		announcementJSONs[i] = string(annJSON)
+	}
+	err := a.persistentDB.RecordPatchSetAnnouncements(ctx, project, changeNum, patchSetNum, announcementJSONs)
+	if err != nil {
+		a.logger.Error("could not record patchset announcements", zap.Error(err), zap.Int("num-announcements", len(announcements)))
+	}
 }
 
 // ChangeAbandoned is called when we receive a Gerrit change-abandoned event.
