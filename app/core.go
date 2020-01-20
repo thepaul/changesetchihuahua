@@ -18,6 +18,7 @@ import (
 
 	"github.com/jtolds/changesetchihuahua/gerrit"
 	"github.com/jtolds/changesetchihuahua/gerrit/events"
+	"github.com/jtolds/changesetchihuahua/messages"
 )
 
 const (
@@ -45,66 +46,8 @@ const (
 	workingDayEndHour   = 17
 )
 
-// ChatSystem abstracts interaction with an instant-message chat system, so that this doesn't
-// become dependent on Slack specifically. I believe this interface ought to work for Hipchat
-// and IRC, but I'm not familiar with the APIs of many other multi-user chat networks.
-type ChatSystem interface {
-	SetIncomingMessageCallback(cb func(userID, chanID string, isDM bool, text string) string)
-	GetInstallingUser(ctx context.Context) (string, error)
-
-	GetUserInfoByID(ctx context.Context, chatID string) (ChatUser, error)
-	LookupUserByEmail(ctx context.Context, email string) (ChatUser, error)
-	LookupChannelByName(ctx context.Context, name string) (string, error)
-
-	SendNotification(ctx context.Context, chatID, message string) (MessageHandle, error)
-	SendPersonalReport(ctx context.Context, chatID, title string, reportItems []string) (MessageHandle, error)
-	SendChannelNotification(ctx context.Context, chanID, message string) (MessageHandle, error)
-	SendChannelReport(ctx context.Context, chanID, title string, reportItems []string) (MessageHandle, error)
-}
-
-type ChatSystemFormatter interface {
-	FormatBold(msg string) string
-	FormatItalic(msg string) string
-	FormatBlockQuote(msg string) string
-	FormatChangeLink(project string, number int, url, subject string) string
-	FormatChannelLink(channelID string) string
-	FormatUserLink(chatID string) string
-	FormatLink(url, text string) string
-	UnwrapUserLink(userLink string) string
-	UnwrapChannelLink(channelLink string) string
-	UnwrapLink(link string) string
-}
-
-// MessageHandle represents a sent message. Some chat systems support editing and deletion of
-// sent messages, and we may take advantage of that at some point (but this is mostly ignored for
-// now).
-type MessageHandle interface {
-	SentTime() time.Time
-}
-
-// ChatUser represents profile and presence information about a user on ChatSytem.
-type ChatUser interface {
-	ChatID() string
-	RealName() string
-	IsOnline() bool
-	Timezone() *time.Location
-}
-
-// GerritClient abstracts interaction with the Gerrit client, largely just so that it can be
-// possible to mock. Ew.
-type GerritClient interface {
-	QueryChangesEx(context.Context, []string, *gerrit.QueryChangesOpts) ([]gerrit.ChangeInfo, bool, error)
-	GetChangeEx(context.Context, string, *gerrit.QueryChangesOpts) (gerrit.ChangeInfo, error)
-	ListRevisionComments(context.Context, string, string) (map[string][]gerrit.CommentInfo, error)
-	GetPatchSetInfo(context.Context, string, string) (gerrit.ChangeInfo, error)
-	GetChangeReviewers(context.Context, string) ([]gerrit.ReviewerInfo, error)
-	QueryAccountsEx(context.Context, string, *gerrit.QueryAccountsOpts) ([]gerrit.AccountInfo, bool, error)
-	URLForChange(*gerrit.ChangeInfo) string
-	Close() error
-}
-
 type gerritConnector interface {
-	OpenGerrit(context.Context, string) (GerritClient, error)
+	OpenGerrit(context.Context, string) (gerrit.Client, error)
 }
 
 type configItemType int
@@ -136,13 +79,13 @@ var configItems = []configItem{
 
 type App struct {
 	logger       *zap.Logger
-	chat         ChatSystem
-	fmt          ChatSystemFormatter
+	chat         messages.ChatSystem
+	fmt          messages.ChatSystemFormatter
 	persistentDB *PersistentDB
 
 	gerritConnector gerritConnector
 	gerritLock      sync.Mutex
-	gerritHandle    GerritClient
+	gerritHandle    gerrit.Client
 
 	reporterLock sync.Mutex
 
@@ -154,7 +97,7 @@ type App struct {
 	removeProjectPrefix string
 }
 
-func New(ctx context.Context, logger *zap.Logger, chat ChatSystem, chatFormatter ChatSystemFormatter, persistentDB *PersistentDB, gerritConnector gerritConnector) *App {
+func New(ctx context.Context, logger *zap.Logger, chat messages.ChatSystem, chatFormatter messages.ChatSystemFormatter, persistentDB *PersistentDB, gerritConnector gerritConnector) *App {
 	app := &App{
 		logger:             logger,
 		chat:               chat,
@@ -236,7 +179,7 @@ func (a *App) Close() error {
 	return err
 }
 
-func (a *App) getGerritClient() GerritClient {
+func (a *App) getGerritClient() gerrit.Client {
 	a.gerritLock.Lock()
 	defer a.gerritLock.Unlock()
 	return a.gerritHandle
@@ -718,8 +661,8 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 		// notify thread participants after reviewers; since thread participants are likely
 		// reviewers themselves, these thread updates will make most sense in the context
 		// of the above notification.
-		for destAccount, messages := range threadParticipants {
-			combinedMsg := strings.Join(messages, "\n")
+		for destAccount, messageList := range threadParticipants {
+			combinedMsg := strings.Join(messageList, "\n")
 			wg.Go(func() {
 				a.notify(ctx, &destAccount, combinedMsg)
 			})
@@ -877,9 +820,9 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 
 	// send the reviewerMsg or ccMsg, as appropriate, to all relevant users
 	haveNotified := map[string]struct{}{uploader.Username: {}, change.Owner.Username: {}}
-	messages := []string{reviewerMsg, ccMsg}
+	notifyMessages := []string{reviewerMsg, ccMsg}
 	for i, reviewerGroup := range []string{"REVIEWER", "CC"} {
-		useMsg := messages[i]
+		useMsg := notifyMessages[i]
 		for _, reviewer := range changeInfo.Reviewers[reviewerGroup] {
 			if _, alreadyNotified := haveNotified[reviewer.Username]; !alreadyNotified {
 				haveNotified[reviewer.Username] = struct{}{}
@@ -1165,7 +1108,7 @@ func (a *App) GlobalReport(ctx context.Context, t time.Time, chanID string) {
 	logger.Debug("global report processing change info", zap.Int("num-changes", len(changes)))
 	sort.Sort(byLastUpdateTime(changes))
 
-	var messages []string
+	var lines []string
 changeLoop:
 	for _, change := range changes {
 		// note all users that have voted on this patchset
@@ -1263,7 +1206,7 @@ changeLoop:
 			age = prettyTimeDelta(sinceCreated) + " old"
 		}
 
-		messages = append(messages, fmt.Sprintf("%s %s\n%s · %s · %s",
+		lines = append(lines, fmt.Sprintf("%s %s\n%s · %s · %s",
 			a.formatChangeInfoLink(&change),
 			ownerName,
 			a.fmt.FormatItalic(staleness),
@@ -1271,11 +1214,11 @@ changeLoop:
 			waitingMsg))
 	}
 	if more {
-		messages = append(messages, a.fmt.FormatItalic("More change sets awaiting action exist. List is too long!"))
+		lines = append(lines, a.fmt.FormatItalic("More change sets awaiting action exist. List is too long!"))
 	}
 
-	logger.Debug("global report complete", zap.Int("num-messages", len(messages)))
-	if _, err := a.chat.SendChannelReport(ctx, chanID, "Waiting for review", messages); err != nil {
+	logger.Debug("global report complete", zap.Int("num-lines", len(lines)))
+	if _, err := a.chat.SendChannelReport(ctx, chanID, "Waiting for review", lines); err != nil {
 		logger.Error("failed to send global message report", zap.Error(err))
 	}
 }
@@ -1514,7 +1457,7 @@ func prettyTimeDelta(delta time.Duration) string {
 	return fmt.Sprintf("%d %s%s", count, timeUnits, plural)
 }
 
-func (a *App) isGoodTimeForReport(ctx context.Context, _ *gerrit.AccountInfo, _ ChatUser, t time.Time) bool {
+func (a *App) isGoodTimeForReport(ctx context.Context, _ *gerrit.AccountInfo, _ messages.ChatUser, t time.Time) bool {
 	hour := t.Hour()
 	day := t.Weekday()
 	if day == time.Saturday || day == time.Sunday {

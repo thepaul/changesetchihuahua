@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/jtolds/changesetchihuahua/app"
+	"github.com/jtolds/changesetchihuahua/messages"
 )
 
 var (
@@ -65,7 +65,7 @@ func (lw logWrapper) Output(callDepth int, s string) error {
 }
 
 type EventedChatSystem interface {
-	app.ChatSystem
+	messages.ChatSystem
 
 	HandleEvents(ctx context.Context) error
 }
@@ -224,7 +224,7 @@ func (s *slackInterface) GetInstallingUser(ctx context.Context) (string, error) 
 	return s.oauthData.UserID, nil
 }
 
-func (s *slackInterface) SendNotification(ctx context.Context, id, message string) (app.MessageHandle, error) {
+func (s *slackInterface) SendNotification(ctx context.Context, id, message string) (messages.MessageHandle, error) {
 	// TODO: can the IM channel be cached? is it expected to remain valid as long as the userid?
 	_, _, chanID, err := s.rtm.OpenIMChannelContext(ctx, id)
 	if err != nil {
@@ -233,24 +233,24 @@ func (s *slackInterface) SendNotification(ctx context.Context, id, message strin
 	return s.PostMessage(ctx, chanID, message)
 }
 
-func (s *slackInterface) SendPersonalReport(ctx context.Context, chatID, title string, items []string) (app.MessageHandle, error) {
+func (s *slackInterface) SendPersonalReport(ctx context.Context, chatID, title string, items []string) (messages.MessageHandle, error) {
 	return s.SendNotification(ctx, chatID, fmt.Sprintf("*%s*\n%s", title, strings.Join(items, "\n\n")))
 }
 
-func (s *slackInterface) SendChannelNotification(ctx context.Context, chanID, message string) (app.MessageHandle, error) {
+func (s *slackInterface) SendChannelNotification(ctx context.Context, chanID, message string) (messages.MessageHandle, error) {
 	return s.PostMessage(ctx, chanID, message)
 }
 
-func (s *slackInterface) SendChannelReport(ctx context.Context, chatID, title string, items []string) (app.MessageHandle, error) {
+func (s *slackInterface) SendChannelReport(ctx context.Context, chatID, title string, items []string) (messages.MessageHandle, error) {
 	return s.PostMessage(ctx, chatID, fmt.Sprintf("*%s*\n\n%s", title, strings.Join(items, "\n\n")))
 }
 
-func (s *slackInterface) PostMessage(ctx context.Context, chanID, message string) (app.MessageHandle, error) {
+func (s *slackInterface) PostMessage(ctx context.Context, chanID, message string) (messages.MessageHandle, error) {
 	ch, tm, err := s.api.PostMessageContext(ctx, chanID, slack.MsgOptionText(message, false))
 	if err != nil {
 		return nil, err
 	}
-	return &MessageHandle{Channel: ch, Timestamp: tm}, nil
+	return &messageHandle{Channel: ch, Timestamp: tm}, nil
 }
 
 func (s *slackInterface) LookupChannelByName(ctx context.Context, channelName string) (string, error) {
@@ -276,7 +276,7 @@ func (s *slackInterface) LookupChannelByName(ctx context.Context, channelName st
 	}
 }
 
-func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (app.ChatUser, error) {
+func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (messages.ChatUser, error) {
 	user, err := s.api.GetUserByEmailContext(ctx, email)
 	if err != nil {
 		return nil, err
@@ -288,7 +288,7 @@ func (s *slackInterface) LookupUserByEmail(ctx context.Context, email string) (a
 	return &slackUser{info: user, presence: presence}, nil
 }
 
-func (s *slackInterface) GetUserInfoByID(ctx context.Context, chatID string) (app.ChatUser, error) {
+func (s *slackInterface) GetUserInfoByID(ctx context.Context, chatID string) (messages.ChatUser, error) {
 	var eg errgroup.Group
 	var user *slack.User
 	var presence *slack.UserPresence
@@ -444,14 +444,14 @@ func (f *Formatter) UnwrapLink(link string) string {
 	return link
 }
 
-// MessageHandle provides a handle to a Slack message, which can be used to change
+// messageHandle provides a handle to a Slack message, which can be used to change
 // or delete that message later.
-type MessageHandle struct {
+type messageHandle struct {
 	Channel   string
 	Timestamp string
 }
 
-func (mh *MessageHandle) SentTime() time.Time {
+func (mh *messageHandle) SentTime() time.Time {
 	parts := strings.SplitN(mh.Timestamp, ".", 2)
 	sec, _ := strconv.ParseInt(parts[0], 10, 64)
 	nano := int64(0)

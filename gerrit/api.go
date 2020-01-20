@@ -14,13 +14,26 @@ import (
 	"github.com/zeebo/errs"
 )
 
-type Client struct {
+// Client abstracts interaction with the Gerrit client, largely just so that it can be
+// possible to mock. Ew.
+type Client interface {
+	QueryChangesEx(context.Context, []string, *QueryChangesOpts) ([]ChangeInfo, bool, error)
+	GetChangeEx(context.Context, string, *QueryChangesOpts) (ChangeInfo, error)
+	ListRevisionComments(context.Context, string, string) (map[string][]CommentInfo, error)
+	GetPatchSetInfo(context.Context, string, string) (ChangeInfo, error)
+	GetChangeReviewers(context.Context, string) ([]ReviewerInfo, error)
+	QueryAccountsEx(context.Context, string, *QueryAccountsOpts) ([]AccountInfo, bool, error)
+	URLForChange(*ChangeInfo) string
+	Close() error
+}
+
+type client struct {
 	ServerURL     *url.URL
 	httpClient    *http.Client
 	gerritVersion string
 }
 
-func OpenClient(ctx context.Context, serverURL string) (*Client, error) {
+func OpenClient(ctx context.Context, serverURL string) (Client, error) {
 	urlObj, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, err
@@ -32,7 +45,7 @@ func OpenClient(ctx context.Context, serverURL string) (*Client, error) {
 		urlObj.RawPath = strings.TrimRight(urlObj.RawPath, "/") + "/"
 	}
 
-	client := &Client{
+	client := &client{
 		ServerURL:  urlObj,
 		httpClient: http.DefaultClient,
 	}
@@ -43,16 +56,16 @@ func OpenClient(ctx context.Context, serverURL string) (*Client, error) {
 	return client, nil
 }
 
-func (c *Client) Close() error {
+func (c *client) Close() error {
 	c.httpClient.CloseIdleConnections()
 	return nil
 }
 
-func (c *Client) URLForChange(change *ChangeInfo) string {
+func (c *client) URLForChange(change *ChangeInfo) string {
 	return c.makeURL(fmt.Sprintf("/c/%s/+/%d", url.PathEscape(change.Project), change.Number), nil)
 }
 
-func (c *Client) makeURL(path string, query url.Values) string {
+func (c *client) makeURL(path string, query url.Values) string {
 	path = strings.TrimLeft(path, "/")
 	myURL := *c.ServerURL // copy
 	myURL.RawPath += path
@@ -73,7 +86,7 @@ func (c *Client) makeURL(path string, query url.Values) string {
 	return myURL.String()
 }
 
-func (c *Client) doGet(ctx context.Context, path string, query url.Values) (*http.Response, error) {
+func (c *client) doGet(ctx context.Context, path string, query url.Values) (*http.Response, error) {
 	myURL := c.makeURL(path, query)
 	req, err := http.NewRequestWithContext(ctx, "GET", myURL, nil)
 	if err != nil {
@@ -92,7 +105,7 @@ func (c *Client) doGet(ctx context.Context, path string, query url.Values) (*htt
 	return resp, nil
 }
 
-func (c *Client) doGetString(ctx context.Context, path string, query url.Values) (string, error) {
+func (c *client) doGetString(ctx context.Context, path string, query url.Values) (string, error) {
 	resp, err := c.doGet(ctx, path, query)
 	if err != nil {
 		return "", err
@@ -106,7 +119,7 @@ func (c *Client) doGetString(ctx context.Context, path string, query url.Values)
 	return string(body), nil
 }
 
-func (c *Client) QueryChangesEx(ctx context.Context, queries []string, opts *QueryChangesOpts) (changes []ChangeInfo, more bool, err error) {
+func (c *client) QueryChangesEx(ctx context.Context, queries []string, opts *QueryChangesOpts) (changes []ChangeInfo, more bool, err error) {
 	values := url.Values{
 		"q": queries,
 	}
@@ -136,12 +149,12 @@ func (c *Client) QueryChangesEx(ctx context.Context, queries []string, opts *Que
 	return changes, more, nil
 }
 
-func (c *Client) QueryChanges(ctx context.Context, query string) ([]ChangeInfo, error) {
+func (c *client) QueryChanges(ctx context.Context, query string) ([]ChangeInfo, error) {
 	changes, _, err := c.QueryChangesEx(ctx, []string{query}, &QueryChangesOpts{})
 	return changes, err
 }
 
-func (c *Client) GetChangeEx(ctx context.Context, changeID string, opts *QueryChangesOpts) (changeInfo ChangeInfo, err error) {
+func (c *client) GetChangeEx(ctx context.Context, changeID string, opts *QueryChangesOpts) (changeInfo ChangeInfo, err error) {
 	values := url.Values{}
 	if labels := opts.assembleLabels(); len(labels) > 0 {
 		values["o"] = labels
@@ -157,7 +170,7 @@ func (c *Client) GetChangeEx(ctx context.Context, changeID string, opts *QueryCh
 	return changeInfo, err
 }
 
-func (c *Client) GetChangeReviewers(ctx context.Context, changeID string) ([]ReviewerInfo, error) {
+func (c *client) GetChangeReviewers(ctx context.Context, changeID string) ([]ReviewerInfo, error) {
 	resp, err := c.doGet(ctx, "/changes/"+url.PathEscape(changeID)+"/reviewers/", nil)
 	if err != nil {
 		return nil, err
@@ -170,7 +183,7 @@ func (c *Client) GetChangeReviewers(ctx context.Context, changeID string) ([]Rev
 	return reviewers, err
 }
 
-func (c *Client) GetPatchSetInfo(ctx context.Context, changeID, patchSetID string) (changeInfo ChangeInfo, err error) {
+func (c *client) GetPatchSetInfo(ctx context.Context, changeID, patchSetID string) (changeInfo ChangeInfo, err error) {
 	queryPath := fmt.Sprintf("/changes/%s/revisions/%s/review",
 		url.PathEscape(changeID), url.PathEscape(patchSetID))
 	resp, err := c.doGet(ctx, queryPath, nil)
@@ -184,7 +197,7 @@ func (c *Client) GetPatchSetInfo(ctx context.Context, changeID, patchSetID strin
 	return changeInfo, err
 }
 
-func (c *Client) ListChangeMessages(ctx context.Context, changeID string) ([]ChangeMessageInfo, error) {
+func (c *client) ListChangeMessages(ctx context.Context, changeID string) ([]ChangeMessageInfo, error) {
 	resp, err := c.doGet(ctx, fmt.Sprintf("/changes/%s/messages", url.PathEscape(changeID)), nil)
 	if err != nil {
 		return nil, err
@@ -197,7 +210,7 @@ func (c *Client) ListChangeMessages(ctx context.Context, changeID string) ([]Cha
 	return changeMessages, err
 }
 
-func (c *Client) ListRevisionComments(ctx context.Context, changeID, revisionID string) (map[string][]CommentInfo, error) {
+func (c *client) ListRevisionComments(ctx context.Context, changeID, revisionID string) (map[string][]CommentInfo, error) {
 	resp, err := c.doGet(ctx, fmt.Sprintf("/changes/%s/revisions/%s/comments/", url.PathEscape(changeID), url.PathEscape(revisionID)), nil)
 	if err != nil {
 		return nil, err
@@ -374,7 +387,7 @@ func (o *QueryChangesOpts) assembleLabels() (labels []string) {
 	return labels
 }
 
-func (c *Client) QueryAccountsEx(ctx context.Context, query string, opts *QueryAccountsOpts) (users []AccountInfo, more bool, err error) {
+func (c *client) QueryAccountsEx(ctx context.Context, query string, opts *QueryAccountsOpts) (users []AccountInfo, more bool, err error) {
 	values := url.Values{
 		"q": []string{query},
 	}
@@ -404,7 +417,7 @@ func (c *Client) QueryAccountsEx(ctx context.Context, query string, opts *QueryA
 	return users, more, nil
 }
 
-func (c *Client) QueryAccounts(ctx context.Context, query string) ([]AccountInfo, error) {
+func (c *client) QueryAccounts(ctx context.Context, query string) ([]AccountInfo, error) {
 	changes, _, err := c.QueryAccountsEx(ctx, query, &QueryAccountsOpts{})
 	return changes, err
 }
