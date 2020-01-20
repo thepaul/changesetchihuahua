@@ -718,9 +718,9 @@ func (b byLastUpdateTime) Less(i, j int) bool {
 }
 
 var (
-	buildStartedRegexp    = regexp.MustCompile(`^Patch Set [1-9][0-9]*:\n\n\s*Build Started\s+(https?:\S+)\s*$`)
-	buildSuccessfulRegexp = regexp.MustCompile(`^Patch Set [1-9][0-9]*:\s+[-_A-Za-z0-9 ]*\+[0-9]+\n\nBuild Successful\n\n(https?:\S+) : SUCCESS\s*$`)
-	buildFailedRegexp     = regexp.MustCompile(`^Patch Set [1-9][0-9]*:\s+[-_A-Za-z0-9 ]*-[0-9]+\n\nBuild Failed\n\n(https?:\S+) : (FAILURE|ABORTED)\s*$`)
+	buildStartedRegexp    = regexp.MustCompile(`^Patch Set [1-9][0-9]*:\n *\n *Build Started +(https?:\S+)\s*$`)
+	buildSuccessfulRegexp = regexp.MustCompile(`^Patch Set [1-9][0-9]*: +[-_A-Za-z0-9 ]*\+[0-9]+\n *\nBuild Successful *\n *\n(https?:\S+) : SUCCESS\s*$`)
+	buildFailedRegexp     = regexp.MustCompile(`^Patch Set [1-9][0-9]*: +[-_A-Za-z0-9 ]*-[0-9]+\n *\nBuild Failed *\n *\n(https?:\S+) : (FAILURE|ABORTED)\s*$`)
 )
 
 func (a *App) JenkinsRobotCommentAdded(ctx context.Context, change events.Change, patchSet events.PatchSet, comment string) bool {
