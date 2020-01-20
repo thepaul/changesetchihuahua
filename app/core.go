@@ -559,16 +559,16 @@ var (
 // - For all new inline comments, notify the change owner and all prior thread participants (except
 //   for the commenter).
 func (a *App) CommentAdded(ctx context.Context, author events.Account, change events.Change, patchSet events.PatchSet, comment string, eventTime time.Time) {
-	owner := &change.Owner
-	commenterLink := a.prepareUserLink(ctx, &author)
-	changeLink := a.formatChangeLink(&change)
-
 	jenkinsRobot := a.persistentDB.JustGetConfig(ctx, "jenkins-robot-user", "")
 	if jenkinsRobot != "" && author.Username == jenkinsRobot {
 		if a.JenkinsRobotCommentAdded(ctx, change, patchSet, comment) {
 			return
 		}
 	}
+
+	owner := &change.Owner
+	commenterLink := a.prepareUserLink(ctx, &author)
+	changeLink := a.formatChangeLink(&change)
 
 	var topCommentLink string
 	topCommentID := a.findReviewMessageID(ctx, change.BestID(), patchSet.Number, author.Username, comment, eventTime)
