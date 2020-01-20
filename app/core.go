@@ -953,33 +953,37 @@ func (a *App) notifyAllReviewers(ctx context.Context, changeID, msg string, exce
 	wg.Wait()
 }
 
-func (a *App) notify(ctx context.Context, gerritUser *events.Account, message string) {
+func (a *App) notify(ctx context.Context, gerritUser *events.Account, message string) messages.MessageHandle {
 	chatID := a.lookupGerritUser(ctx, gerritUser)
 	if chatID == "" {
-		return
+		return nil
 	}
-	_, err := a.chat.SendNotification(ctx, chatID, message)
+	msgHandle, err := a.chat.SendNotification(ctx, chatID, message)
 	if err != nil {
 		a.logger.Error("failed to send notification",
 			zap.Error(err),
 			zap.String("chat-id", chatID),
 			zap.String("gerrit-username", gerritUser.Username))
+		return nil
 	}
+	return msgHandle
 }
 
-func (a *App) generalNotify(ctx context.Context, message string) {
+func (a *App) generalNotify(ctx context.Context, message string) messages.MessageHandle {
 	chanID := a.persistentDB.JustGetConfig(ctx, "global-notify-channel", "")
 	if chanID == "" {
 		// no global notify channel configured.
-		return
+		return nil
 	}
-	_, err := a.chat.SendChannelNotification(ctx, chanID, message)
+	handle, err := a.chat.SendChannelNotification(ctx, chanID, message)
 	if err != nil {
 		a.logger.Error("failed to send notification to channel",
 			zap.Error(err),
 			zap.String("channel-id", chanID),
 			zap.String("message", message))
+		return nil
 	}
+	return handle
 }
 
 func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string {
