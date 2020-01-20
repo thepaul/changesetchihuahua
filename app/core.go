@@ -535,7 +535,7 @@ func (a *App) pickBestMatchMessage(revisionNum int, authorUsername string, sentT
 }
 
 var (
-	commentsXCommentsRegex = regexp.MustCompile(`(^|\n\n)\([0-9]+ comments?\)\s*$`)
+	commentsXCommentsRegex = regexp.MustCompile(`^\s*\([0-9]+ comments?\)(\n\n|$)`)
 	commentsPatchSetRegex  = regexp.MustCompile(`^\s*Patch Set [0-9]+:\s*`)
 )
 
@@ -570,7 +570,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 
 	// strip off the "Patch Set X:"	bit at the top; we'll convey that piece of info separately.
 	comment = commentsPatchSetRegex.ReplaceAllString(comment, "")
-	// and strip off the "(X comments)" bit at the bottom; we'll send the comments verbatim.
+	// and strip off the "(X comments)" bit at the top; we'll send the comments verbatim.
 	comment = commentsXCommentsRegex.ReplaceAllString(comment, "")
 	comment = strings.TrimSpace(comment)
 	// and if it's still longer than a single line, prepend a newline so it's easier to read
