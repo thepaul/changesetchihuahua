@@ -40,10 +40,10 @@ func applyStringTransformerSubst(s, transformer string) (string, error) {
 	result := make([]byte, 0, len(s))
 	restOfString := 0
 	for _, subMatches := range transformerRegexp.FindAllStringSubmatchIndex(s, n) {
-		result = append(result, []byte(s[0:subMatches[0]])...)
+		result = append(result, []byte(s[restOfString:subMatches[0]])...)
 		result = transformerRegexp.ExpandString(result, replaceString, s, subMatches)
 		restOfString = subMatches[1]
 	}
-	result = append(result, []byte(s[restOfString:len(s)-1])...)
+	result = append(result, []byte(s[restOfString:len(s)])...)
 	return string(result), nil
 }
