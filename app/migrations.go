@@ -2,6 +2,8 @@
 // sources:
 // migrations/201911252319_init.down.sql
 // migrations/201911252319_init.up.sql
+// migrations/202001170654_add_patchset_announcements.down.sql
+// migrations/202001170654_add_patchset_announcements.up.sql
 package app
 
 import (
@@ -118,6 +120,46 @@ func _201911252319_initUpSql() (*asset, error) {
 	return a, nil
 }
 
+var __202001170654_add_patchset_announcementsDownSql = []byte("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\x84\xcc\x41\x0a\xc2\x30\x10\x85\xe1\x7d\x4f\x91\x0b\xf4\x04\x5d\x29\x69\xa1\x20\x55\xac\x0b\x77\xc3\x30\x0e\x36\xd2\xcc\xc4\x64\x02\x1e\x5f\xdc\x14\x17\x82\xcb\xc7\xfb\xf8\xdb\xd6\x89\x06\x29\x89\xc9\x82\x8a\x9b\x9f\xeb\xa4\x1e\x0d\x67\xad\x99\x78\xdc\x9e\x41\xf3\x10\x56\x6e\x1a\x7f\x3e\x9e\xdc\x38\xf9\xfe\xea\x12\x1a\x2d\x85\x0d\x50\x44\xab\x10\x47\x16\x83\x94\xf5\xc1\x64\x20\x18\x19\x68\x41\xb9\x33\x48\x8d\xb0\xe9\xcf\x08\xb7\x57\xf7\x3f\x65\xe5\x0b\x5e\x76\xfb\x43\xff\x1b\x96\xae\x79\x07\x00\x00\xff\xff\x48\x9d\xb1\xf1\xc9\x00\x00\x00")
+
+func _202001170654_add_patchset_announcementsDownSqlBytes() ([]byte, error) {
+	return bindataRead(
+		__202001170654_add_patchset_announcementsDownSql,
+		"202001170654_add_patchset_announcements.down.sql",
+	)
+}
+
+func _202001170654_add_patchset_announcementsDownSql() (*asset, error) {
+	bytes, err := _202001170654_add_patchset_announcementsDownSqlBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	info := bindataFileInfo{name: "202001170654_add_patchset_announcements.down.sql", size: 201, mode: os.FileMode(420), modTime: time.Unix(1574794364, 0)}
+	a := &asset{bytes: bytes, info: info}
+	return a, nil
+}
+
+var __202001170654_add_patchset_announcementsUpSql = []byte("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\x8c\x90\xcf\x6a\xc2\x40\x10\xc6\xef\x79\x8a\x39\x2a\xc4\x27\xf0\x94\xd6\xb1\x2c\x4d\x56\x49\xb6\xa0\xa7\x65\x59\x07\x93\x92\xcc\xa6\xd9\x09\xf4\xf1\x4b\x5b\xb4\x11\xab\xed\x5c\xbf\xe1\xfb\xf3\x5b\x2c\x80\x43\xc3\xb1\x27\x2f\x4d\x60\xa8\xde\x5a\x1d\x56\x4e\x5c\x15\xc6\xc1\x93\x3a\x2b\xeb\x30\xac\x9b\x96\x92\xe4\xb1\xc4\xcc\x20\x98\xec\x21\x47\xe8\x9d\xf8\x3a\x92\x58\xc7\x1c\x46\xf6\xd4\x11\x4b\x84\x59\x02\xdf\xc7\x63\x07\x4a\x1b\x7c\xc2\x12\xf4\xc6\x80\x7e\xc9\xf3\xf4\x24\xf6\x43\x78\x25\x2f\x96\x5d\x47\x60\x70\x67\xae\x5f\x7c\xed\xf8\x48\xf6\xbe\xcd\xa9\xc3\xdd\xaf\x8e\x62\x74\x47\xb2\xb5\xe3\x43\x7b\x2b\x4e\x22\x18\x55\x60\x65\xb2\x62\x7b\xad\x6e\x4b\x55\x64\xe5\x1e\x9e\x71\x0f\xb3\xaf\x69\xf3\x64\xbe\x3c\x13\x51\x7a\x85\xbb\xdf\x89\xd8\xe9\x54\xfb\x33\xca\x4e\xbb\xdb\xe6\xf0\x0e\x1b\x7d\x93\xe9\x05\xaf\x74\x82\x26\xbd\x44\x30\x5f\xfe\xa7\x91\xc4\x3f\xf3\x24\x7e\x7a\x7d\x04\x00\x00\xff\xff\x63\xd0\x34\x07\x22\x02\x00\x00")
+
+func _202001170654_add_patchset_announcementsUpSqlBytes() ([]byte, error) {
+	return bindataRead(
+		__202001170654_add_patchset_announcementsUpSql,
+		"202001170654_add_patchset_announcements.up.sql",
+	)
+}
+
+func _202001170654_add_patchset_announcementsUpSql() (*asset, error) {
+	bytes, err := _202001170654_add_patchset_announcementsUpSqlBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	info := bindataFileInfo{name: "202001170654_add_patchset_announcements.up.sql", size: 546, mode: os.FileMode(420), modTime: time.Unix(1574794364, 0)}
+	a := &asset{bytes: bytes, info: info}
+	return a, nil
+}
+
 // Asset loads and returns the asset for the given name.
 // It returns an error if the asset could not be found or
 // could not be loaded.
@@ -170,8 +212,10 @@ func AssetNames() []string {
 
 // _bindata is a table, holding each asset generator, mapped to its name.
 var _bindata = map[string]func() (*asset, error){
-	"201911252319_init.down.sql": _201911252319_initDownSql,
-	"201911252319_init.up.sql":   _201911252319_initUpSql,
+	"201911252319_init.down.sql":                       _201911252319_initDownSql,
+	"201911252319_init.up.sql":                         _201911252319_initUpSql,
+	"202001170654_add_patchset_announcements.down.sql": _202001170654_add_patchset_announcementsDownSql,
+	"202001170654_add_patchset_announcements.up.sql":   _202001170654_add_patchset_announcementsUpSql,
 }
 
 // AssetDir returns the file names below a certain
@@ -215,8 +259,10 @@ type bintree struct {
 }
 
 var _bintree = &bintree{nil, map[string]*bintree{
-	"201911252319_init.down.sql": &bintree{_201911252319_initDownSql, map[string]*bintree{}},
-	"201911252319_init.up.sql":   &bintree{_201911252319_initUpSql, map[string]*bintree{}},
+	"201911252319_init.down.sql":                       &bintree{_201911252319_initDownSql, map[string]*bintree{}},
+	"201911252319_init.up.sql":                         &bintree{_201911252319_initUpSql, map[string]*bintree{}},
+	"202001170654_add_patchset_announcements.down.sql": &bintree{_202001170654_add_patchset_announcementsDownSql, map[string]*bintree{}},
+	"202001170654_add_patchset_announcements.up.sql":   &bintree{_202001170654_add_patchset_announcementsUpSql, map[string]*bintree{}},
 }}
 
 // RestoreAsset restores an asset under the given directory

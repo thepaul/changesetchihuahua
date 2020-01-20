@@ -283,13 +283,24 @@ CREATE TABLE inline_comments (
 	updated_at timestamp NOT NULL,
 	PRIMARY KEY ( comment_id )
 );
+CREATE TABLE patchset_announcements (
+	num serial NOT NULL,
+	project_name text NOT NULL,
+	change_num integer NOT NULL,
+	patchset_num integer NOT NULL,
+	message_handle text NOT NULL,
+	ts timestamp NOT NULL,
+	PRIMARY KEY ( num )
+);
 CREATE TABLE team_configs (
 	config_key text NOT NULL,
 	config_value text NOT NULL,
 	PRIMARY KEY ( config_key )
 );
 CREATE INDEX last_report_idx ON gerrit_users ( last_report );
-CREATE INDEX updated_at_idx ON inline_comments ( updated_at );`
+CREATE INDEX updated_at_idx ON inline_comments ( updated_at );
+CREATE INDEX patchset_announcement_project_name_change_num_patchset_num_idx ON patchset_announcements ( project_name, change_num, patchset_num );
+CREATE INDEX patchset_announcement_ts_idx ON patchset_announcements ( ts );`
 }
 
 func (obj *postgresDB) wrapTx(tx *sql.Tx) txMethods {
@@ -364,13 +375,24 @@ CREATE TABLE inline_comments (
 	updated_at TIMESTAMP NOT NULL,
 	PRIMARY KEY ( comment_id )
 );
+CREATE TABLE patchset_announcements (
+	num INTEGER NOT NULL,
+	project_name TEXT NOT NULL,
+	change_num INTEGER NOT NULL,
+	patchset_num INTEGER NOT NULL,
+	message_handle TEXT NOT NULL,
+	ts TIMESTAMP NOT NULL,
+	PRIMARY KEY ( num )
+);
 CREATE TABLE team_configs (
 	config_key TEXT NOT NULL,
 	config_value TEXT NOT NULL,
 	PRIMARY KEY ( config_key )
 );
 CREATE INDEX last_report_idx ON gerrit_users ( last_report );
-CREATE INDEX updated_at_idx ON inline_comments ( updated_at );`
+CREATE INDEX updated_at_idx ON inline_comments ( updated_at );
+CREATE INDEX patchset_announcement_project_name_change_num_patchset_num_idx ON patchset_announcements ( project_name, change_num, patchset_num );
+CREATE INDEX patchset_announcement_ts_idx ON patchset_announcements ( ts );`
 }
 
 func (obj *sqlite3DB) wrapTx(tx *sql.Tx) txMethods {
@@ -569,6 +591,135 @@ func (f InlineComment_UpdatedAt_Field) value() interface{} {
 }
 
 func (InlineComment_UpdatedAt_Field) _Column() string { return "updated_at" }
+
+type PatchsetAnnouncement struct {
+	Num           int
+	ProjectName   string
+	ChangeNum     int
+	PatchsetNum   int
+	MessageHandle string
+	Ts            time.Time
+}
+
+func (PatchsetAnnouncement) _Table() string { return "patchset_announcements" }
+
+type PatchsetAnnouncement_Update_Fields struct {
+}
+
+type PatchsetAnnouncement_Num_Field struct {
+	_set   bool
+	_null  bool
+	_value int
+}
+
+func PatchsetAnnouncement_Num(v int) PatchsetAnnouncement_Num_Field {
+	return PatchsetAnnouncement_Num_Field{_set: true, _value: v}
+}
+
+func (f PatchsetAnnouncement_Num_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (PatchsetAnnouncement_Num_Field) _Column() string { return "num" }
+
+type PatchsetAnnouncement_ProjectName_Field struct {
+	_set   bool
+	_null  bool
+	_value string
+}
+
+func PatchsetAnnouncement_ProjectName(v string) PatchsetAnnouncement_ProjectName_Field {
+	return PatchsetAnnouncement_ProjectName_Field{_set: true, _value: v}
+}
+
+func (f PatchsetAnnouncement_ProjectName_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (PatchsetAnnouncement_ProjectName_Field) _Column() string { return "project_name" }
+
+type PatchsetAnnouncement_ChangeNum_Field struct {
+	_set   bool
+	_null  bool
+	_value int
+}
+
+func PatchsetAnnouncement_ChangeNum(v int) PatchsetAnnouncement_ChangeNum_Field {
+	return PatchsetAnnouncement_ChangeNum_Field{_set: true, _value: v}
+}
+
+func (f PatchsetAnnouncement_ChangeNum_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (PatchsetAnnouncement_ChangeNum_Field) _Column() string { return "change_num" }
+
+type PatchsetAnnouncement_PatchsetNum_Field struct {
+	_set   bool
+	_null  bool
+	_value int
+}
+
+func PatchsetAnnouncement_PatchsetNum(v int) PatchsetAnnouncement_PatchsetNum_Field {
+	return PatchsetAnnouncement_PatchsetNum_Field{_set: true, _value: v}
+}
+
+func (f PatchsetAnnouncement_PatchsetNum_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (PatchsetAnnouncement_PatchsetNum_Field) _Column() string { return "patchset_num" }
+
+type PatchsetAnnouncement_MessageHandle_Field struct {
+	_set   bool
+	_null  bool
+	_value string
+}
+
+func PatchsetAnnouncement_MessageHandle(v string) PatchsetAnnouncement_MessageHandle_Field {
+	return PatchsetAnnouncement_MessageHandle_Field{_set: true, _value: v}
+}
+
+func (f PatchsetAnnouncement_MessageHandle_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (PatchsetAnnouncement_MessageHandle_Field) _Column() string { return "message_handle" }
+
+type PatchsetAnnouncement_Ts_Field struct {
+	_set   bool
+	_null  bool
+	_value time.Time
+}
+
+func PatchsetAnnouncement_Ts(v time.Time) PatchsetAnnouncement_Ts_Field {
+	v = toUTC(v)
+	return PatchsetAnnouncement_Ts_Field{_set: true, _value: v}
+}
+
+func (f PatchsetAnnouncement_Ts_Field) value() interface{} {
+	if !f._set || f._null {
+		return nil
+	}
+	return f._value
+}
+
+func (PatchsetAnnouncement_Ts_Field) _Column() string { return "ts" }
 
 type TeamConfig struct {
 	ConfigKey   string
@@ -837,6 +988,10 @@ type ConfigValue_Row struct {
 	ConfigValue string
 }
 
+type MessageHandle_Row struct {
+	MessageHandle string
+}
+
 func (obj *postgresImpl) CreateNoReturn_GerritUser(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
 	gerrit_user_chat_id GerritUser_ChatId_Field,
@@ -872,6 +1027,33 @@ func (obj *postgresImpl) CreateNoReturn_TeamConfig(ctx context.Context,
 	obj.logStmt(__stmt, __config_key_val, __config_value_val)
 
 	_, err = obj.driver.Exec(__stmt, __config_key_val, __config_value_val)
+	if err != nil {
+		return obj.makeErr(err)
+	}
+	return nil
+
+}
+
+func (obj *postgresImpl) CreateNoReturn_PatchsetAnnouncement(ctx context.Context,
+	patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
+	patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
+	patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field,
+	patchset_announcement_message_handle PatchsetAnnouncement_MessageHandle_Field) (
+	err error) {
+
+	__now := obj.db.Hooks.Now().UTC()
+	__project_name_val := patchset_announcement_project_name.value()
+	__change_num_val := patchset_announcement_change_num.value()
+	__patchset_num_val := patchset_announcement_patchset_num.value()
+	__message_handle_val := patchset_announcement_message_handle.value()
+	__ts_val := __now.UTC()
+
+	var __embed_stmt = __sqlbundle_Literal("INSERT INTO patchset_announcements ( project_name, change_num, patchset_num, message_handle, ts ) VALUES ( ?, ?, ?, ?, ? )")
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __project_name_val, __change_num_val, __patchset_num_val, __message_handle_val, __ts_val)
+
+	_, err = obj.driver.Exec(__stmt, __project_name_val, __change_num_val, __patchset_num_val, __message_handle_val, __ts_val)
 	if err != nil {
 		return obj.makeErr(err)
 	}
@@ -951,6 +1133,41 @@ func (obj *postgresImpl) Get_TeamConfig_ConfigValue_By_ConfigKey(ctx context.Con
 		return nil, obj.makeErr(err)
 	}
 	return row, nil
+
+}
+
+func (obj *postgresImpl) All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNum_And_PatchsetNum(ctx context.Context,
+	patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
+	patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
+	patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field) (
+	rows []*MessageHandle_Row, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT patchset_announcements.message_handle FROM patchset_announcements WHERE patchset_announcements.project_name = ? AND patchset_announcements.change_num = ? AND patchset_announcements.patchset_num = ?")
+
+	var __values []interface{}
+	__values = append(__values, patchset_announcement_project_name.value(), patchset_announcement_change_num.value(), patchset_announcement_patchset_num.value())
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	__rows, err := obj.driver.Query(__stmt, __values...)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	defer __rows.Close()
+
+	for __rows.Next() {
+		row := &MessageHandle_Row{}
+		err = __rows.Scan(&row.MessageHandle)
+		if err != nil {
+			return nil, obj.makeErr(err)
+		}
+		rows = append(rows, row)
+	}
+	if err := __rows.Err(); err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return rows, nil
 
 }
 
@@ -1092,6 +1309,32 @@ func (obj *postgresImpl) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Cont
 
 }
 
+func (obj *postgresImpl) Delete_PatchsetAnnouncement_By_Ts_Less(ctx context.Context,
+	patchset_announcement_ts_less PatchsetAnnouncement_Ts_Field) (
+	count int64, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("DELETE FROM patchset_announcements WHERE patchset_announcements.ts < ?")
+
+	var __values []interface{}
+	__values = append(__values, patchset_announcement_ts_less.value())
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	__res, err := obj.driver.Exec(__stmt, __values...)
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	return count, nil
+
+}
+
 func (impl postgresImpl) isConstraintError(err error) (
 	constraint string, ok bool) {
 	if e, ok := err.(*pq.Error); ok {
@@ -1106,6 +1349,16 @@ func (obj *postgresImpl) deleteAll(ctx context.Context) (count int64, err error)
 	var __res sql.Result
 	var __count int64
 	__res, err = obj.driver.Exec("DELETE FROM team_configs;")
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	__count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+	count += __count
+	__res, err = obj.driver.Exec("DELETE FROM patchset_announcements;")
 	if err != nil {
 		return 0, obj.makeErr(err)
 	}
@@ -1175,6 +1428,33 @@ func (obj *sqlite3Impl) CreateNoReturn_TeamConfig(ctx context.Context,
 	obj.logStmt(__stmt, __config_key_val, __config_value_val)
 
 	_, err = obj.driver.Exec(__stmt, __config_key_val, __config_value_val)
+	if err != nil {
+		return obj.makeErr(err)
+	}
+	return nil
+
+}
+
+func (obj *sqlite3Impl) CreateNoReturn_PatchsetAnnouncement(ctx context.Context,
+	patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
+	patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
+	patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field,
+	patchset_announcement_message_handle PatchsetAnnouncement_MessageHandle_Field) (
+	err error) {
+
+	__now := obj.db.Hooks.Now().UTC()
+	__project_name_val := patchset_announcement_project_name.value()
+	__change_num_val := patchset_announcement_change_num.value()
+	__patchset_num_val := patchset_announcement_patchset_num.value()
+	__message_handle_val := patchset_announcement_message_handle.value()
+	__ts_val := __now.UTC()
+
+	var __embed_stmt = __sqlbundle_Literal("INSERT INTO patchset_announcements ( project_name, change_num, patchset_num, message_handle, ts ) VALUES ( ?, ?, ?, ?, ? )")
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __project_name_val, __change_num_val, __patchset_num_val, __message_handle_val, __ts_val)
+
+	_, err = obj.driver.Exec(__stmt, __project_name_val, __change_num_val, __patchset_num_val, __message_handle_val, __ts_val)
 	if err != nil {
 		return obj.makeErr(err)
 	}
@@ -1254,6 +1534,41 @@ func (obj *sqlite3Impl) Get_TeamConfig_ConfigValue_By_ConfigKey(ctx context.Cont
 		return nil, obj.makeErr(err)
 	}
 	return row, nil
+
+}
+
+func (obj *sqlite3Impl) All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNum_And_PatchsetNum(ctx context.Context,
+	patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
+	patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
+	patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field) (
+	rows []*MessageHandle_Row, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT patchset_announcements.message_handle FROM patchset_announcements WHERE patchset_announcements.project_name = ? AND patchset_announcements.change_num = ? AND patchset_announcements.patchset_num = ?")
+
+	var __values []interface{}
+	__values = append(__values, patchset_announcement_project_name.value(), patchset_announcement_change_num.value(), patchset_announcement_patchset_num.value())
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	__rows, err := obj.driver.Query(__stmt, __values...)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	defer __rows.Close()
+
+	for __rows.Next() {
+		row := &MessageHandle_Row{}
+		err = __rows.Scan(&row.MessageHandle)
+		if err != nil {
+			return nil, obj.makeErr(err)
+		}
+		rows = append(rows, row)
+	}
+	if err := __rows.Err(); err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return rows, nil
 
 }
 
@@ -1405,6 +1720,32 @@ func (obj *sqlite3Impl) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Conte
 
 }
 
+func (obj *sqlite3Impl) Delete_PatchsetAnnouncement_By_Ts_Less(ctx context.Context,
+	patchset_announcement_ts_less PatchsetAnnouncement_Ts_Field) (
+	count int64, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("DELETE FROM patchset_announcements WHERE patchset_announcements.ts < ?")
+
+	var __values []interface{}
+	__values = append(__values, patchset_announcement_ts_less.value())
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	__res, err := obj.driver.Exec(__stmt, __values...)
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	return count, nil
+
+}
+
 func (obj *sqlite3Impl) getLastGerritUser(ctx context.Context,
 	pk int64) (
 	gerrit_user *GerritUser, err error) {
@@ -1438,6 +1779,24 @@ func (obj *sqlite3Impl) getLastTeamConfig(ctx context.Context,
 		return nil, obj.makeErr(err)
 	}
 	return team_config, nil
+
+}
+
+func (obj *sqlite3Impl) getLastPatchsetAnnouncement(ctx context.Context,
+	pk int64) (
+	patchset_announcement *PatchsetAnnouncement, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT patchset_announcements.num, patchset_announcements.project_name, patchset_announcements.change_num, patchset_announcements.patchset_num, patchset_announcements.message_handle, patchset_announcements.ts FROM patchset_announcements WHERE _rowid_ = ?")
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, pk)
+
+	patchset_announcement = &PatchsetAnnouncement{}
+	err = obj.driver.QueryRow(__stmt, pk).Scan(&patchset_announcement.Num, &patchset_announcement.ProjectName, &patchset_announcement.ChangeNum, &patchset_announcement.PatchsetNum, &patchset_announcement.MessageHandle, &patchset_announcement.Ts)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return patchset_announcement, nil
 
 }
 
@@ -1478,6 +1837,16 @@ func (obj *sqlite3Impl) deleteAll(ctx context.Context) (count int64, err error) 
 	var __res sql.Result
 	var __count int64
 	__res, err = obj.driver.Exec("DELETE FROM team_configs;")
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+
+	__count, err = __res.RowsAffected()
+	if err != nil {
+		return 0, obj.makeErr(err)
+	}
+	count += __count
+	__res, err = obj.driver.Exec("DELETE FROM patchset_announcements;")
 	if err != nil {
 		return 0, obj.makeErr(err)
 	}
@@ -1564,6 +1933,18 @@ func (rx *Rx) All_GerritUser_By_LastReport_Less(ctx context.Context,
 	return tx.All_GerritUser_By_LastReport_Less(ctx, gerrit_user_last_report_less)
 }
 
+func (rx *Rx) All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNum_And_PatchsetNum(ctx context.Context,
+	patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
+	patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
+	patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field) (
+	rows []*MessageHandle_Row, err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNum_And_PatchsetNum(ctx, patchset_announcement_project_name, patchset_announcement_change_num, patchset_announcement_patchset_num)
+}
+
 func (rx *Rx) CreateNoReturn_GerritUser(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
 	gerrit_user_chat_id GerritUser_ChatId_Field,
@@ -1574,6 +1955,20 @@ func (rx *Rx) CreateNoReturn_GerritUser(ctx context.Context,
 		return
 	}
 	return tx.CreateNoReturn_GerritUser(ctx, gerrit_user_gerrit_username, gerrit_user_chat_id, optional)
+
+}
+
+func (rx *Rx) CreateNoReturn_PatchsetAnnouncement(ctx context.Context,
+	patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
+	patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
+	patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field,
+	patchset_announcement_message_handle PatchsetAnnouncement_MessageHandle_Field) (
+	err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.CreateNoReturn_PatchsetAnnouncement(ctx, patchset_announcement_project_name, patchset_announcement_change_num, patchset_announcement_patchset_num, patchset_announcement_message_handle)
 
 }
 
@@ -1597,6 +1992,17 @@ func (rx *Rx) Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
 		return
 	}
 	return tx.Delete_InlineComment_By_UpdatedAt_Less(ctx, inline_comment_updated_at_less)
+
+}
+
+func (rx *Rx) Delete_PatchsetAnnouncement_By_Ts_Less(ctx context.Context,
+	patchset_announcement_ts_less PatchsetAnnouncement_Ts_Field) (
+	count int64, err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.Delete_PatchsetAnnouncement_By_Ts_Less(ctx, patchset_announcement_ts_less)
 
 }
 
@@ -1658,10 +2064,23 @@ type Methods interface {
 		gerrit_user_last_report_less GerritUser_LastReport_Field) (
 		rows []*GerritUser, err error)
 
+	All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNum_And_PatchsetNum(ctx context.Context,
+		patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
+		patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
+		patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field) (
+		rows []*MessageHandle_Row, err error)
+
 	CreateNoReturn_GerritUser(ctx context.Context,
 		gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
 		gerrit_user_chat_id GerritUser_ChatId_Field,
 		optional GerritUser_Create_Fields) (
+		err error)
+
+	CreateNoReturn_PatchsetAnnouncement(ctx context.Context,
+		patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
+		patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
+		patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field,
+		patchset_announcement_message_handle PatchsetAnnouncement_MessageHandle_Field) (
 		err error)
 
 	CreateNoReturn_TeamConfig(ctx context.Context,
@@ -1671,6 +2090,10 @@ type Methods interface {
 
 	Delete_InlineComment_By_UpdatedAt_Less(ctx context.Context,
 		inline_comment_updated_at_less InlineComment_UpdatedAt_Field) (
+		count int64, err error)
+
+	Delete_PatchsetAnnouncement_By_Ts_Less(ctx context.Context,
+		patchset_announcement_ts_less PatchsetAnnouncement_Ts_Field) (
 		count int64, err error)
 
 	Get_GerritUser_By_GerritUsername(ctx context.Context,

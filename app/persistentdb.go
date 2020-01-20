@@ -218,6 +218,35 @@ func (ud *PersistentDB) IdentifyNewInlineComments(ctx context.Context, commentsB
 	return nil
 }
 
+func (ud *PersistentDB) GetPatchSetAnnouncements(ctx context.Context, projectName string, changeNum, patchSetNum int) ([]string, error) {
+	rows, err := ud.db.All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNum_And_PatchsetNum(
+		ctx,
+		dbx.PatchsetAnnouncement_ProjectName(projectName),
+		dbx.PatchsetAnnouncement_ChangeNum(changeNum),
+		dbx.PatchsetAnnouncement_PatchsetNum(patchSetNum))
+	if err != nil {
+		return nil, err
+	}
+	handles := make([]string, len(rows))
+	for i, row := range rows {
+		handles[i] = row.MessageHandle
+	}
+	return handles, nil
+}
+
+func (ud *PersistentDB) RecordPatchSetAnnouncements(ctx context.Context, projectName string, changeNum, patchSetNum int, announcementHandles []string) error {
+	var allErrors error
+	for _, handle := range announcementHandles {
+		err := ud.db.CreateNoReturn_PatchsetAnnouncement(ctx,
+			dbx.PatchsetAnnouncement_ProjectName(projectName),
+			dbx.PatchsetAnnouncement_ChangeNum(changeNum),
+			dbx.PatchsetAnnouncement_PatchsetNum(patchSetNum),
+			dbx.PatchsetAnnouncement_MessageHandle(handle))
+		allErrors = errs.Combine(allErrors, err)
+	}
+	return allErrors
+}
+
 func (ud *PersistentDB) GetConfig(ctx context.Context, key, defaultValue string) (string, error) {
 	ud.dbLock.Lock()
 	defer ud.dbLock.Unlock()

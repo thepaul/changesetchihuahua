@@ -70,3 +70,38 @@ update team_config (
     where team_config.config_key = ?
     noreturn
 )
+
+model patchset_announcement (
+    key num
+
+    // the num field serves no purpose other than to appease dbx, which requires a primary key
+    field num serial
+
+    field project_name text
+    field change_num int
+    field patchset_num int
+    field message_handle text
+    field ts utimestamp ( autoinsert )
+
+    index (
+        name patchset_announcement_project_name_change_num_patchset_num_idx
+        fields project_name change_num patchset_num
+    )
+    index (
+        name patchset_announcement_ts_idx
+        fields ts
+    )
+)
+
+create patchset_announcement ( noreturn )
+
+read all (
+    select patchset_announcement.message_handle
+    where  patchset_announcement.project_name = ?
+    where  patchset_announcement.change_num = ?
+    where  patchset_announcement.patchset_num = ?
+)
+
+delete patchset_announcement (
+    where patchset_announcement.ts < ?
+)
