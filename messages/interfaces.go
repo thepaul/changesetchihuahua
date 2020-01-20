@@ -2,6 +2,7 @@ package messages
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -10,6 +11,7 @@ import (
 // specific messages.
 type MessageHandle interface {
 	SentTime() time.Time
+	json.Marshaler
 }
 
 // ChatSystem abstracts interaction with an instant-message chat system, so that this doesn't
@@ -27,6 +29,8 @@ type ChatSystem interface {
 	SendPersonalReport(ctx context.Context, chatID, title string, reportItems []string) (MessageHandle, error)
 	SendChannelNotification(ctx context.Context, chanID, message string) (MessageHandle, error)
 	SendChannelReport(ctx context.Context, chanID, title string, reportItems []string) (MessageHandle, error)
+
+	UnmarshalMessageHandle(handleData string) (MessageHandle, error)
 }
 
 // ChatSystemFormatter controls how to format messages for a specific ChatSystem.

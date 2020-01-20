@@ -103,6 +103,14 @@ func (s *slackInterface) SetIncomingMessageCallback(cb func(userID, chanID strin
 	s.incomingMessageCallback = cb
 }
 
+func (s *slackInterface) UnmarshalMessageHandle(handleJSON string) (messages.MessageHandle, error) {
+	var mh messageHandle
+	if err := json.Unmarshal([]byte(handleJSON), &mh); err != nil {
+		return nil, err
+	}
+	return &mh, nil
+}
+
 func (s *slackInterface) HandleEvents(ctx context.Context) error {
 	for {
 		select {
@@ -462,6 +470,10 @@ func (mh *messageHandle) SentTime() time.Time {
 		nano, _ = strconv.ParseInt(parts[1][:9], 10, 64)
 	}
 	return time.Unix(sec, nano)
+}
+
+func (mh *messageHandle) MarshalJSON() ([]byte, error) {
+	return json.Marshal(*mh)
 }
 
 type slackUser struct {
