@@ -32,9 +32,9 @@ type uiWebServer struct {
 
 func newUIWebState(logger *zap.Logger, governor *Governor, externalURL *url.URL) *uiWebState {
 	return &uiWebState{
-		logger:              logger,
-		governor:            governor,
-		externalURL:         externalURL,
+		logger:      logger,
+		governor:    governor,
+		externalURL: externalURL,
 	}
 }
 

@@ -45,7 +45,7 @@ type Team struct {
 	slackConn slack.EventedChatSystem
 }
 
-type vanillaGerritConnector struct {}
+type vanillaGerritConnector struct{}
 
 func (v vanillaGerritConnector) OpenGerrit(ctx context.Context, address string) (gerrit.Client, error) {
 	return gerrit.OpenClient(ctx, address)

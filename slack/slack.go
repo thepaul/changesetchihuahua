@@ -340,7 +340,7 @@ func (s *slackInterface) InformBuildFailure(ctx context.Context, mh messages.Mes
 	if !ok {
 		return errs.New("given message handle is a %T, not a *messageHandle", mh)
 	}
-	_, _, err := s.rtm.PostMessageContext(ctx, mhObj.Channel, slack.MsgOptionText("Build failure: " + link, false), slack.MsgOptionTS(mhObj.Timestamp))
+	_, _, err := s.rtm.PostMessageContext(ctx, mhObj.Channel, slack.MsgOptionText("Build failure: "+link, false), slack.MsgOptionTS(mhObj.Timestamp))
 	reactionErr := s.rtm.AddReactionContext(ctx, "x", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
 	return errs.Combine(err, reactionErr)
 }
@@ -425,7 +425,7 @@ func escapeText(t string) string {
 	return slackutilsx.EscapeMessage(t)
 }
 
-type Formatter struct {}
+type Formatter struct{}
 
 func (f *Formatter) FormatBold(msg string) string {
 	return "*" + msg + "*"
@@ -476,7 +476,7 @@ func (f *Formatter) UnwrapChannelLink(channelLink string) string {
 
 func (f *Formatter) UnwrapLink(link string) string {
 	if link[0] == '<' && link[len(link)-1] == '>' {
-		link = link[1:len(link)-1]
+		link = link[1 : len(link)-1]
 		if pos := strings.Index(link, "|"); pos >= 0 {
 			link = link[0:pos]
 		}
