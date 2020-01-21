@@ -719,8 +719,8 @@ func (b byLastUpdateTime) Less(i, j int) bool {
 
 var (
 	buildStartedRegexp    = regexp.MustCompile(`^Patch Set [1-9][0-9]*:\n *\n *Build Started +(https?:\S+)\s*$`)
-	buildSuccessfulRegexp = regexp.MustCompile(`^Patch Set [1-9][0-9]*: +[-_A-Za-z0-9 ]*\+[0-9]+\n *\nBuild Successful *\n *\n(https?:\S+) : SUCCESS\s*$`)
-	buildFailedRegexp     = regexp.MustCompile(`^Patch Set [1-9][0-9]*: +[-_A-Za-z0-9 ]*-[0-9]+\n *\nBuild Failed *\n *\n(https?:\S+) : (FAILURE|ABORTED)\s*$`)
+	buildSuccessfulRegexp = regexp.MustCompile(`^Patch Set [1-9][0-9]*: +[_A-Za-z0-9 ][-_A-Za-z0-9 ]*\+[0-9]+\n *\nBuild Successful *\n *\n(https?:\S+) : SUCCESS\s*$`)
+	buildFailedRegexp     = regexp.MustCompile(`^Patch Set [1-9][0-9]*: +(?:[_A-Za-z0-9 ][-_A-Za-z0-9 ]*-[0-9]+|-[_A-Za-z0-9 ][-_A-Za-z0-9 ]*)\n *\nBuild Failed *\n *\n(https?:\S+) : (FAILURE|ABORTED)\s*$`)
 )
 
 func (a *App) JenkinsRobotCommentAdded(ctx context.Context, change events.Change, patchSet events.PatchSet, comment string) bool {
@@ -779,7 +779,7 @@ func (a *App) JenkinsRobotCommentAdded(ctx context.Context, change events.Change
 		notifyMsg = fmt.Sprintf("Build for %s succeeded", changeLink)
 		informFunc = a.chat.InformBuildSuccess
 	case "fail":
-		notifyMsg = fmt.Sprintf("Build for %s failed", changeLink)
+		notifyMsg = fmt.Sprintf("Build for %s failed: %s", changeLink, link)
 		informFunc = a.chat.InformBuildFailure
 	case "abort":
 		notifyMsg = fmt.Sprintf("Build for %s was canceled", changeLink)

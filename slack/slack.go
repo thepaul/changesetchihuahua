@@ -324,7 +324,13 @@ func (s *slackInterface) GetUserPresence(ctx context.Context, chatID string) (*s
 func (s *slackInterface) InformBuildStarted(ctx context.Context, mh messages.MessageHandle, link string) error {
 	// do nothing for now- not clear we can do anything very useful here that isn't overly
 	// noisy for the users
-	return nil
+	mhObj, ok := mh.(*messageHandle)
+	if !ok {
+		return errs.New("given message handle is a %T, not a *messageHandle", mh)
+	}
+	err1 := s.rtm.RemoveReactionContext(ctx, "white_check_mark", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+	err2 := s.rtm.RemoveReactionContext(ctx, "x", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+	return errs.Combine(err1, err2)
 }
 
 func (s *slackInterface) InformBuildSuccess(ctx context.Context, mh messages.MessageHandle, link string) error {
