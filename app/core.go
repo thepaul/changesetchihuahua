@@ -908,7 +908,7 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 		ccMsg = fmt.Sprintf("%s pushed a new changeset %s, with you CC'd.",
 			uploaderLink, changeLink)
 		generalMsg = fmt.Sprintf("%s pushed a new changeset %s.",
-			uploaderLink, changeLink)
+			uploader.Name, changeLink)
 	} else {
 		changeType := "REWORK"
 		// this map should have exactly one entry or zero entries, but we can't predict the key
