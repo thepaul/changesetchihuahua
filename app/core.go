@@ -76,6 +76,7 @@ var configItems = []configItem{
 	{Name: "personal-report-hour", Description: "Hour (in 24-hour time) in each user's local timezone when the daily review report should be sent, if they are online. If they are not online, the system will keep checking every hour during working hours.", ItemType: ConfigItemInt},
 	{Name: "work-needed-query", Description: "Gerrit query to use for determining change sets with work needed for the global report", ItemType: ConfigItemString},
 	{Name: "jenkins-robot-user", Description: "Gerrit robot user that will post updates from Jenkins. If provided, these will be parsed and changed to display in a more helpful way", ItemType: ConfigItemString},
+	{Name: "jenkins-link-transformer", Description: "String transformation to apply to Jenkins links before passing them on. Looks like a sed subst command, but with $1 backreferences instead of \"\\1\"", ItemType: ConfigItemString},
 }
 
 type App struct {
