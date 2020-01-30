@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -95,9 +96,6 @@ type hypotheticalUser struct {
 var _ messages.ChatUser = (*hypotheticalUser)(nil)
 
 func newHypotheticalUser(email, username, name, chatID string, gerritID int) *hypotheticalUser {
-	if name == "" {
-		name = email
-	}
 	if chatID == "" {
 		chatID = "CHATID(" + username + ")"
 	}
@@ -678,6 +676,102 @@ func TestJenkinsCommentAdded(t *testing.T) {
 			},
 			"type": "comment-added",
 			"eventCreatedOn": 1496369229
+		}`)
+	})
+}
+
+func TestReviewerAdded(t *testing.T) {
+	testWithMockChat(t, map[string]string{
+		"gerrit-address":        "https://gerrit.jorts.io",
+		"remove-project-prefix": "jorts/",
+		"global-notify-channel": "GLOBALNOTIFY",
+	}, func(ts *testSystem) {
+		userA := ts.makeUser("user-a@jorts.io", "user_a", "Yoozer Eyy")
+		userB := ts.makeUser("user-b@jorts.io", "user_b", "")
+		userC := ts.makeUser("user-c@jorts.io", "user_c", "You Zersee")
+		userD := ts.makeUser("user-d@jorts.io", "user_d", "Ewes Erdi")
+
+		eventTime := time.Date(2020, 1, 30, 3, 45, 33, 0, time.UTC)
+
+		ts.MockGerrit.EXPECT().
+			GetChangeEx(gomock.Any(), "jorts/testiness~1", &gerrit.QueryChangesOpts{
+				DescribeDetailedAccounts: true,
+				DescribeReviewerUpdates: true,
+			}).
+			Times(1).
+			Return(gerrit.ChangeInfo{
+				ID:       "jorts%2Ftestiness~master~Ide512e00237f102c771b7056d3e557586f82272a",
+				Project:  "jorts/testiness",
+				Branch:   "master",
+				ChangeID: "Ide512e00237f102c771b7056d3e557586f82272a",
+				Subject:  "beans",
+				Status:   "NEW",
+				Created:  "2020-01-30 03:43:59.000000000",
+				Updated:  "2020-01-30 03:43:59.000000000",
+				Number:   1,
+				Owner:    *userA.GerritAccount(),
+				ReviewerUpdates: []gerrit.ReviewerUpdateInfo{
+					{
+						Updated:   eventTime.Add(-60*time.Second).Format(gerrit.TimeLayout),
+						UpdatedBy: *userC.GerritAccount(),
+						Reviewer:  userB.GerritAccount(),
+						State:     "REVIEWER",
+					},
+					{
+						Updated:   eventTime.Add(-30*time.Second).Format(gerrit.TimeLayout),
+						UpdatedBy: *userC.GerritAccount(),
+						Reviewer:  userB.GerritAccount(),
+						State:     "REMOVED",
+					},
+					{
+						Updated:   eventTime.Format(gerrit.TimeLayout),
+						UpdatedBy: *userD.GerritAccount(),
+						Reviewer:  userB.GerritAccount(),
+						State:     "REVIEWER",
+					},
+				},
+			}, nil)
+
+		// notify new reviewer, including who did the adding
+		ts.MockChat.EXPECT().
+			SendNotification(gomock.Any(), userB.chatID, stringTrimEq("<@CHATID(user_d)> added you as a reviewer on [testiness@1] <https://gerrit.jorts.io/c/jorts/testiness/+/1|beans>")).
+			Times(1).
+			Return(nil, nil)
+
+		// notify change owner, including who did the adding
+		ts.MockChat.EXPECT().
+			SendNotification(gomock.Any(), userA.chatID, stringTrimEq("<@CHATID(user_d)> added <@CHATID(user_b)> as a reviewer on your change [testiness@1] <https://gerrit.jorts.io/c/jorts/testiness/+/1|beans>")).
+			Times(1).
+			Return(nil, nil)
+
+		// notify notification channel
+		ts.MockChat.EXPECT().
+			SendChannelNotification(gomock.Any(), "GLOBALNOTIFY", "Ewes Erdi added user_b as a reviewer on change [testiness@1] <https://gerrit.jorts.io/c/jorts/testiness/+/1|beans>").
+			Times(1).
+			Return(nil, nil)
+
+		ts.InjectEvent(`{
+			"change": {
+				"project": "jorts/testiness",
+				"branch": "master",
+				"id": "Ide512e00237f102c771b7056d3e557586f82272a",
+				"number": 1,
+				"subject": "beans",
+				"owner": ` + userA.JSON() + `,
+				"url": "https://gerrit.jorts.io/c/jorts/testiness/+/1",
+				"commitMessage": "beans\n\nChange-Id: Ide512e00237f102c771b7056d3e557586f82272a\n",
+				"status": "NEW"
+			},
+			"patchSet": {
+				"number": 2,
+				"revision": "beebeebeebeebeebeebeebeebeebeebeebeebeeb",
+				"uploader": ` + userC.JSON() + `,
+				"author": ` + userD.JSON() + `,
+				"kind": "REWORK"
+			},
+			"reviewer": ` + userB.JSON() + `,
+			"type": "reviewer-added",
+			"eventCreatedOn": ` + strconv.FormatInt(eventTime.Add(time.Second).Unix(), 10) + `
 		}`)
 	})
 }
