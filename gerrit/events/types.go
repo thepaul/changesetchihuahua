@@ -93,14 +93,13 @@ type Account struct {
 	Username string
 }
 
-func (a *Account) String() string {
-	str := a.Username
+// DisplayName gives a name we can use to refer to a Gerrit user without linking the user
+// in chat (which may cause a notification we don't want sent).
+func (a *Account) DisplayName() string {
 	if a.Name != "" {
-		str += " (" + a.Name + ")"
-	} else if a.Email != "" {
-		str += " (" + a.Email + ")"
+		return a.Name
 	}
-	return str
+	return a.Username
 }
 
 // PatchSet refers to a specific patchset within a change.

@@ -614,7 +614,7 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 		withComments += a.fmt.FormatItalic("(with " + a.maybeLink(topCommentLink, fmt.Sprintf("%d inline comment%s", len(newInline), plural)) + ")")
 	}
 
-	tellNotifyChannel = fmt.Sprintf("%s %s %s patchset %d: %s%s", author.Name, a.maybeLink(topCommentLink, "commented on"), changeLink, patchSet.Number, comment, withComments)
+	tellNotifyChannel = fmt.Sprintf("%s %s %s patchset %d: %s%s", author.DisplayName(), a.maybeLink(topCommentLink, "commented on"), changeLink, patchSet.Number, comment, withComments)
 
 	msg := fmt.Sprintf("%s %s %s patchset %d: %s", commenterLink, a.maybeLink(topCommentLink, "commented on"), changeLink, patchSet.Number, comment)
 	if owner.Username != author.Username {
@@ -829,7 +829,7 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 		// the records in Gerrit are alarmingly different from what the event told us. oh well?
 		a.logger.Error("could not identify reviewer update entity via API", zap.Error(err), zap.String("change-id", change.BestID()), zap.String("reviewer", reviewer.Username), zap.Time("event-time", eventTime))
 		a.notify(ctx, &reviewer, fmt.Sprintf("You were added as a reviewer or CC for %s", changeLink))
-		a.generalNotify(ctx, fmt.Sprintf("%s was added as a reviewer or CC for %s", reviewer.Name, changeLink))
+		a.generalNotify(ctx, fmt.Sprintf("%s was added as a reviewer or CC for %s", reviewer.DisplayName(), changeLink))
 		return
 	}
 
@@ -847,7 +847,7 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 			a.notify(ctx, &change.Owner, fmt.Sprintf("%s signed up %s on your change %s",
 				updaterLink, what, changeLink))
 		}
-		a.generalNotify(ctx, fmt.Sprintf("%s signed up %s on change %s", updater.Name, what, changeLink))
+		a.generalNotify(ctx, fmt.Sprintf("%s signed up %s on change %s", updater.DisplayName(), what, changeLink))
 	} else {
 		// the updater added someone else as a reviewer
 		a.notify(ctx, &reviewer, fmt.Sprintf("%s added you %s on %s",
@@ -857,7 +857,7 @@ func (a *App) ReviewerAdded(ctx context.Context, reviewer events.Account, change
 			a.notify(ctx, &change.Owner, fmt.Sprintf("%s added %s %s on your change %s",
 				updaterLink, a.prepareUserLink(ctx, &reviewer), what, changeLink))
 		}
-		a.generalNotify(ctx, fmt.Sprintf("%s added %s %s on change %s", updater.Name, reviewer.Name, what, changeLink))
+		a.generalNotify(ctx, fmt.Sprintf("%s added %s %s on change %s", updater.DisplayName(), reviewer.DisplayName(), what, changeLink))
 	}
 }
 
@@ -909,7 +909,7 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 		ccMsg = fmt.Sprintf("%s pushed a new changeset %s, with you CC'd.",
 			uploaderLink, changeLink)
 		generalMsg = fmt.Sprintf("%s pushed a new changeset %s.",
-			uploader.Name, changeLink)
+			uploader.DisplayName(), changeLink)
 	} else {
 		changeType := "REWORK"
 		// this map should have exactly one entry or zero entries, but we can't predict the key
@@ -919,18 +919,18 @@ func (a *App) PatchSetCreated(ctx context.Context, uploader events.Account, chan
 		switch changeType {
 		case "TRIVIAL_REBASE":
 			generalMsg = fmt.Sprintf("%s rebased change %s into patchset #%d",
-				uploader.Name, changeLink, patchSet.Number)
+				uploader.DisplayName(), changeLink, patchSet.Number)
 			reviewerMsg = fmt.Sprintf("%s rebased change %s into patchset #%d",
 				uploaderLink, changeLink, patchSet.Number)
 		case "NO_CHANGE", "NO_CODE_CHANGE":
 			generalMsg = fmt.Sprintf("%s created a new patchset #%d on change %s (no code changes)",
-				uploader.Name, patchSet.Number, changeLink)
+				uploader.DisplayName(), patchSet.Number, changeLink)
 			reviewerMsg = fmt.Sprintf("%s created a new patchset #%d on change %s (no code changes)",
 				uploaderLink, patchSet.Number, changeLink)
 		default:
 			diffURL := diffURLBetweenPatchSets(&change, patchSet.Number-1, patchSet.Number)
 			generalMsg = fmt.Sprintf("%s uploaded a new patchset #%d on change %s (%s)",
-				uploader.Name, patchSet.Number, changeLink, a.fmt.FormatLink(diffURL, "see changes"))
+				uploader.DisplayName(), patchSet.Number, changeLink, a.fmt.FormatLink(diffURL, "see changes"))
 			reviewerMsg = fmt.Sprintf("%s uploaded a new patchset #%d on change %s (%s)",
 				uploaderLink, patchSet.Number, changeLink, a.fmt.FormatLink(diffURL, "see changes"))
 		}
@@ -997,7 +997,7 @@ func (a *App) ChangeAbandoned(ctx context.Context, abandoner events.Account, cha
 		abandonerLink, changeLink, reason)
 	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{abandoner.Username, change.Owner.Username})
 	generalMsg := fmt.Sprintf("%s marked change %s as abandoned with the message: %s",
-		abandoner.Name, changeLink, reason)
+		abandoner.DisplayName(), changeLink, reason)
 	a.generalNotify(ctx, generalMsg)
 }
 
@@ -1014,7 +1014,7 @@ func (a *App) ChangeRestored(ctx context.Context, restorer events.Account, chang
 		restorerLink, changeLink, patchSet.Number, reason)
 	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{restorer.Username, change.Owner.Username})
 	generalMsg := fmt.Sprintf("%s restored change %s using patchset #%d with the message: %s",
-		restorer.Name, changeLink, patchSet.Number, reason)
+		restorer.DisplayName(), changeLink, patchSet.Number, reason)
 	a.generalNotify(ctx, generalMsg)
 }
 
@@ -1031,7 +1031,7 @@ func (a *App) ChangeMerged(ctx context.Context, submitter events.Account, change
 		submitterLink, patchSet.Number, changeLink)
 	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{submitter.Username, change.Owner.Username})
 	generalMsg := fmt.Sprintf("%s merged patchset #%d of change %s.",
-		submitter.Name, patchSet.Number, changeLink)
+		submitter.DisplayName(), patchSet.Number, changeLink)
 	a.generalNotify(ctx, generalMsg)
 }
 
@@ -1048,7 +1048,7 @@ func (a *App) TopicChanged(ctx context.Context, changer events.Account, change e
 		changerLink, changeLink, change.Topic)
 	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{changer.Username, change.Owner.Username})
 	generalMsg := fmt.Sprintf("%s changed the topic of changeset %s to %q.",
-		changer.Name, changeLink, change.Topic)
+		changer.DisplayName(), changeLink, change.Topic)
 	a.generalNotify(ctx, generalMsg)
 }
 
@@ -1065,7 +1065,7 @@ func (a *App) WipStateChanged(ctx context.Context, changer events.Account, chang
 	}
 	reviewerMsg := fmt.Sprintf("%s marked change %s %s.", changerLink, changeLink, what)
 	a.notifyAllReviewers(ctx, change.BestID(), reviewerMsg, []string{changer.Username, change.Owner.Username})
-	generalMsg := fmt.Sprintf("%s marked change %s %s.", changer.Name, changeLink, what)
+	generalMsg := fmt.Sprintf("%s marked change %s %s.", changer.DisplayName(), changeLink, what)
 	a.generalNotify(ctx, generalMsg)
 }
 
@@ -1524,10 +1524,7 @@ func (a *App) formatUserLink(account *events.Account, chatID string) string {
 		return a.fmt.FormatUserLink(chatID)
 	}
 	// if we don't have a chat ID for them, do our best from the Gerrit account info
-	if account.Name != "" {
-		return account.Name
-	}
-	return account.Username
+	return account.DisplayName()
 }
 
 func (a *App) prepareChannelLink(ctx context.Context, channelName, channelID string) string {
