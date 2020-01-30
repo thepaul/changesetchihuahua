@@ -1,7 +1,6 @@
 package events
 
 import (
-	"math"
 	"strconv"
 	"time"
 )
@@ -11,12 +10,7 @@ import (
 // types used by the REST API, which can be found in gerrit/types.go. These two classes of
 // type are, for the most part, wholly incompatible with each other.
 
-// UnixFloatTime translates a float64 UNIX epoch time to a time.Time.
-func UnixFloatTime(floatTime float64) time.Time {
-	return time.Unix(int64(floatTime), int64((floatTime-math.Floor(floatTime))*1e9))
-}
-
-// UnixFloatTime translates an int64 UNIX epoch time to a time.Time.
+// UnixInt64Time translates an int64 UNIX epoch time to a time.Time.
 func UnixInt64Time(unixTime int64) time.Time {
 	return time.Unix(unixTime, 0)
 }

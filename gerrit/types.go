@@ -550,9 +550,11 @@ type CommentRange struct {
 	EndCharacter int
 }
 
+const TimeLayout = "2006-01-02 15:04:05.000000000"
+
 // ParseTimestamp converts a timestamp from the Gerrit API to a time.Time in UTC.
 func ParseTimestamp(timeStamp string) time.Time {
-	t, err := time.ParseInLocation("2006-01-02 15:04:05.000000000", timeStamp, time.UTC)
+	t, err := time.ParseInLocation(TimeLayout, timeStamp, time.UTC)
 	if err != nil {
 		return time.Time{}
 	}
