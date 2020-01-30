@@ -47,8 +47,8 @@ type Team struct {
 
 type vanillaGerritConnector struct{}
 
-func (v vanillaGerritConnector) OpenGerrit(ctx context.Context, address string) (gerrit.Client, error) {
-	return gerrit.OpenClient(ctx, address)
+func (v vanillaGerritConnector) OpenGerrit(ctx context.Context, logger *zap.Logger, address string) (gerrit.Client, error) {
+	return gerrit.OpenClient(ctx, logger, address)
 }
 
 func NewGovernor(ctx context.Context, logger *zap.Logger, teamFile string) (*Governor, error) {

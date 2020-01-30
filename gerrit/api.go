@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/zeebo/errs"
+	"go.uber.org/zap"
 )
 
 // Client abstracts interaction with the Gerrit client, largely just so that it can be
@@ -31,9 +32,10 @@ type client struct {
 	ServerURL     *url.URL
 	httpClient    *http.Client
 	gerritVersion string
+	log           *zap.Logger
 }
 
-func OpenClient(ctx context.Context, serverURL string) (Client, error) {
+func OpenClient(ctx context.Context, log *zap.Logger, serverURL string) (Client, error) {
 	urlObj, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, err
@@ -48,15 +50,19 @@ func OpenClient(ctx context.Context, serverURL string) (Client, error) {
 	client := &client{
 		ServerURL:  urlObj,
 		httpClient: http.DefaultClient,
+		log:        log.With(zap.String("server-url", serverURL)),
 	}
+	client.log.Debug("testing")
 	client.gerritVersion, err = client.doGetString(ctx, "/config/server/version", nil)
 	if err != nil {
 		return nil, err
 	}
+	client.log.Debug("test passed. ready")
 	return client, nil
 }
 
 func (c *client) Close() error {
+	c.log.Debug("closing gerrit client")
 	c.httpClient.CloseIdleConnections()
 	return nil
 }
@@ -93,12 +99,16 @@ func (c *client) doGet(ctx context.Context, path string, query url.Values) (*htt
 		return nil, nil, errs.Wrap(err)
 	}
 	req.Header.Add("accept", "application/json")
+	logger := c.log.With(zap.String("url", req.URL.String()))
+	logger.Debug("Query", zap.Any("headers", req.Header), zap.Any("form", req.Form))
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		logger.Debug("Query failed", zap.Error(err))
 		return nil, nil, errs.New("could not query Gerrit: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		logger.Debug("Non-success from Gerrit", zap.Int("status-code", resp.StatusCode), zap.String("status-message", resp.Status))
 		return resp, nil, errs.New("unexpected status code %d from query to %q: %s", resp.StatusCode, myURL, resp.Status)
 	}
 	bodyReader := newGerritMagicRemovingReader(resp.Body)
@@ -106,6 +116,7 @@ func (c *client) doGet(ctx context.Context, path string, query url.Values) (*htt
 	if err != nil {
 		return resp, nil, errs.New("reading response body: %w", err)
 	}
+	logger.Debug("Query response", zap.Any("headers", resp.Header), zap.ByteString("body", body))
 	return resp, body, nil
 }
 
@@ -276,6 +287,9 @@ type QueryChangesOpts struct {
 }
 
 func (o *QueryChangesOpts) assembleLabels() (labels []string) {
+	if o == nil {
+		return nil
+	}
 	if o.DescribeLabels {
 		labels = append(labels, "LABELS")
 	}

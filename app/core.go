@@ -36,6 +36,8 @@ var (
 	minIntervalBetweenReports = flag.Duration("min-interval-between-reports", time.Hour*10, "Minimum amount of time that must elapse before more personalized Gerrit reports are sent to a given user")
 
 	inlineCommentMaxAge = flag.Duration("inline-comment-max-age", time.Hour, "Inline comments older than this will not be reported, even if not found in the cache")
+
+	logGerritUsage = flag.Bool("log-gerrit-usage", false, "If given, log all requests and responses to and from Gerrit")
 )
 
 const (
@@ -47,7 +49,7 @@ const (
 )
 
 type gerritConnector interface {
-	OpenGerrit(context.Context, string) (gerrit.Client, error)
+	OpenGerrit(context.Context, *zap.Logger, string) (gerrit.Client, error)
 }
 
 type configItemType int
@@ -405,7 +407,13 @@ func (a *App) ConfigureGerritServer(ctx context.Context, gerritAddress string) e
 			a.logger.Error("failed to close old gerritHandle", zap.Error(err))
 		}
 	}
-	gerritClient, err := a.gerritConnector.OpenGerrit(ctx, gerritAddress)
+	var gerritLog *zap.Logger
+	if *logGerritUsage {
+		gerritLog = a.logger.Named("gerrit")
+	} else {
+		gerritLog = zap.NewNop()
+	}
+	gerritClient, err := a.gerritConnector.OpenGerrit(ctx, gerritLog, gerritAddress)
 	if err != nil {
 		return err
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -17,6 +18,10 @@ import (
 
 	"github.com/jtolds/changesetchihuahua/gerrit/events"
 	"github.com/jtolds/changesetchihuahua/slack"
+)
+
+var (
+	logGerritEvents = flag.Bool("log-gerrit-events", false, "If given, log all Gerrit events received")
 )
 
 type uiWebState struct {
@@ -92,6 +97,9 @@ func (ws *uiWebState) gerritEvent(w http.ResponseWriter, r *http.Request) {
 		ws.logger.Error("reading gerrit payload", zap.Error(err))
 		w.WriteHeader(http.StatusBadRequest)
 		return
+	}
+	if *logGerritEvents {
+		ws.logger.Debug("Gerrit event received", zap.ByteString("body", body))
 	}
 
 	event, err := events.DecodeGerritEvent(body)

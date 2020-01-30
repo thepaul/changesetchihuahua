@@ -15,6 +15,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
 	"github.com/jtolds/changesetchihuahua/app"
@@ -39,7 +40,8 @@ type testSystem struct {
 	MockClients map[string]*MockClient
 }
 
-func (ts *testSystem) OpenGerrit(_ context.Context, _ string) (gerrit.Client, error) {
+func (ts *testSystem) OpenGerrit(_ context.Context, log *zap.Logger, _ string) (gerrit.Client, error) {
+	log.Debug("Gerrit fake client ready")
 	ts.MockGerrit = NewMockClient(ts.Controller)
 	ts.MockGerrit.EXPECT().Close().Times(1).Return(nil)
 	return ts.MockGerrit, nil
