@@ -86,37 +86,43 @@ func (c *client) makeURL(path string, query url.Values) string {
 	return myURL.String()
 }
 
-func (c *client) doGet(ctx context.Context, path string, query url.Values) (*http.Response, error) {
+func (c *client) doGet(ctx context.Context, path string, query url.Values) (*http.Response, []byte, error) {
 	myURL := c.makeURL(path, query)
 	req, err := http.NewRequestWithContext(ctx, "GET", myURL, nil)
 	if err != nil {
-		return nil, errs.Wrap(err)
+		return nil, nil, errs.Wrap(err)
 	}
-	//req.Header.Add("accept-encoding", "gzip")
 	req.Header.Add("accept", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, errs.New("could not query Gerrit: %v", err)
+		return nil, nil, errs.New("could not query Gerrit: %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, errs.New("unexpected status code %d from query to %q: %s", resp.StatusCode, myURL, resp.Status)
+		return resp, nil, errs.New("unexpected status code %d from query to %q: %s", resp.StatusCode, myURL, resp.Status)
 	}
-	resp.Body = newGerritMagicRemovingReader(resp.Body)
-	return resp, nil
+	bodyReader := newGerritMagicRemovingReader(resp.Body)
+	body, err := ioutil.ReadAll(bodyReader)
+	if err != nil {
+		return resp, nil, errs.New("reading response body: %w", err)
+	}
+	return resp, body, nil
 }
 
 func (c *client) doGetString(ctx context.Context, path string, query url.Values) (string, error) {
-	resp, err := c.doGet(ctx, path, query)
+	_, bodyBytes, err := c.doGet(ctx, path, query)
 	if err != nil {
 		return "", err
 	}
-	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
+	return string(bodyBytes), nil
+}
 
-	body, err := ioutil.ReadAll(resp.Body)
+func (c *client) doGetJSON(ctx context.Context, path string, query url.Values, v interface{}) (*http.Response, error) {
+	resp, bodyBytes, err := c.doGet(ctx, path, query)
 	if err != nil {
-		return "", errs.New("reading response body: %v", err)
+		return resp, err
 	}
-	return string(body), nil
+	return resp, json.Unmarshal(bodyBytes, v)
 }
 
 func (c *client) QueryChangesEx(ctx context.Context, queries []string, opts *QueryChangesOpts) (changes []ChangeInfo, more bool, err error) {
@@ -132,14 +138,7 @@ func (c *client) QueryChangesEx(ctx context.Context, queries []string, opts *Que
 	if opts.StartAt != 0 {
 		values.Set("S", strconv.Itoa(opts.StartAt))
 	}
-	resp, err := c.doGet(ctx, "/changes/", values)
-	if err != nil {
-		return nil, false, errs.Wrap(err)
-	}
-	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
-
-	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(&changes); err != nil {
+	if _, err := c.doGetJSON(ctx, "/changes/", values, &changes); err != nil {
 		return nil, false, errs.Wrap(err)
 	}
 
@@ -159,67 +158,29 @@ func (c *client) GetChangeEx(ctx context.Context, changeID string, opts *QueryCh
 	if labels := opts.assembleLabels(); len(labels) > 0 {
 		values["o"] = labels
 	}
-	resp, err := c.doGet(ctx, "/changes/"+url.PathEscape(changeID)+"/", values)
-	if err != nil {
-		return changeInfo, err
-	}
-	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
-
-	decoder := json.NewDecoder(resp.Body)
-	err = decoder.Decode(&changeInfo)
+	_, err = c.doGetJSON(ctx, "/changes/"+url.PathEscape(changeID)+"/", values, &changeInfo)
 	return changeInfo, err
 }
 
-func (c *client) GetChangeReviewers(ctx context.Context, changeID string) ([]ReviewerInfo, error) {
-	resp, err := c.doGet(ctx, "/changes/"+url.PathEscape(changeID)+"/reviewers/", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
-
-	decoder := json.NewDecoder(resp.Body)
-	var reviewers []ReviewerInfo
-	err = decoder.Decode(&reviewers)
+func (c *client) GetChangeReviewers(ctx context.Context, changeID string) (reviewers []ReviewerInfo, err error) {
+	_, err = c.doGetJSON(ctx, "/changes/"+url.PathEscape(changeID)+"/reviewers/", nil, &reviewers)
 	return reviewers, err
 }
 
 func (c *client) GetPatchSetInfo(ctx context.Context, changeID, patchSetID string) (changeInfo ChangeInfo, err error) {
 	queryPath := fmt.Sprintf("/changes/%s/revisions/%s/review",
 		url.PathEscape(changeID), url.PathEscape(patchSetID))
-	resp, err := c.doGet(ctx, queryPath, nil)
-	if err != nil {
-		return changeInfo, err
-	}
-	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
-
-	decoder := json.NewDecoder(resp.Body)
-	err = decoder.Decode(&changeInfo)
+	_, err = c.doGetJSON(ctx, queryPath, nil, &changeInfo)
 	return changeInfo, err
 }
 
-func (c *client) ListChangeMessages(ctx context.Context, changeID string) ([]ChangeMessageInfo, error) {
-	resp, err := c.doGet(ctx, fmt.Sprintf("/changes/%s/messages", url.PathEscape(changeID)), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
-
-	var changeMessages []ChangeMessageInfo
-	decoder := json.NewDecoder(resp.Body)
-	err = decoder.Decode(&changeMessages)
+func (c *client) ListChangeMessages(ctx context.Context, changeID string) (changeMessages []ChangeMessageInfo, err error) {
+	_, err = c.doGetJSON(ctx, fmt.Sprintf("/changes/%s/messages", url.PathEscape(changeID)), nil, &changeMessages)
 	return changeMessages, err
 }
 
-func (c *client) ListRevisionComments(ctx context.Context, changeID, revisionID string) (map[string][]CommentInfo, error) {
-	resp, err := c.doGet(ctx, fmt.Sprintf("/changes/%s/revisions/%s/comments/", url.PathEscape(changeID), url.PathEscape(revisionID)), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
-
-	var commentMap map[string][]CommentInfo
-	decoder := json.NewDecoder(resp.Body)
-	err = decoder.Decode(&commentMap)
+func (c *client) ListRevisionComments(ctx context.Context, changeID, revisionID string) (commentMap map[string][]CommentInfo, err error) {
+	_, err = c.doGetJSON(ctx, fmt.Sprintf("/changes/%s/revisions/%s/comments/", url.PathEscape(changeID), url.PathEscape(revisionID)), nil, &commentMap)
 	return commentMap, err
 }
 
@@ -400,14 +361,8 @@ func (c *client) QueryAccountsEx(ctx context.Context, query string, opts *QueryA
 	if opts.StartAt != 0 {
 		values.Set("S", strconv.Itoa(opts.StartAt))
 	}
-	resp, err := c.doGet(ctx, "/accounts/", values)
+	_, err = c.doGetJSON(ctx, "/accounts/", values, &users)
 	if err != nil {
-		return nil, false, errs.Wrap(err)
-	}
-	defer func() { err = errs.Combine(err, resp.Body.Close()) }()
-
-	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(&users); err != nil {
 		return nil, false, errs.Wrap(err)
 	}
 
