@@ -74,6 +74,8 @@ func DecodeGerritEvent(eventJSON []byte) (GerritEvent, error) {
 		evStruct = &VoteDeletedEvent{}
 	case "wip-state-changed":
 		evStruct = &WipStateChangedEvent{}
+	case "private-state-changed":
+		evStruct = &PrivateStateChangedEvent{}
 	default:
 		return nil, EventDecodingError.New("unrecognized event type %q", eventType.Type)
 	}
@@ -220,4 +222,12 @@ type WipStateChangedEvent struct {
 	PatchSet PatchSet `json:"oldTopic"`
 	Change   Change
 	RefName  string
+}
+
+// PrivateStateChangedEvent is sent when the private state of the changeset has changed.
+type PrivateStateChangedEvent struct {
+	Base
+	Change   Change
+	PatchSet PatchSet `json:"patchSet"`
+	Changer  Account
 }

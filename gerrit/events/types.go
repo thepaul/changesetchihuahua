@@ -43,6 +43,10 @@ type Change struct {
 	Open bool
 	// Status indicates the current state of this change ("NEW"/"MERGED"/"ABANDONED").
 	Status string
+	// Private indicates if the change is private.
+	Private bool
+	// WIP indicates if the change is currently marked as a Work In Progress.
+	WIP bool
 	// Comments gives all inline/file comments for this change.
 	Comments []Message
 	// TrackingIDs gives all issue tracking system links, as scraped out of the commit
@@ -66,9 +70,6 @@ type Change struct {
 	// AllReviewers is a list of reviewers added to this change.
 	AllReviewers []Account `json:"allReviewers"`
 
-	// WIP indicates whether this change is currently marked as a Work In Progress.
-	// (This isn't in the docs; gleaned from received events.)
-	WIP bool
 }
 
 // The bare Change-ID value is not always enough to identify a unique change. According to the
