@@ -27,7 +27,7 @@ type AccountInfo struct {
 	// SecondaryEmails is a list of the secondary email addresses of the user. Only set for
 	// account queries when DescribeAllEmails is given, and if the calling user has the
 	// ModifyAccount capability.
-	SecondaryEmails []string `json:",omitempty"`
+	SecondaryEmails []string `json:"secondary_emails,omitempty"`
 	// Username is the username of the user. Only set if detailed account information is
 	// requested with DescribeDetailedAccounts (for change queries) or DescribeDetails (for
 	// account queries).
@@ -71,7 +71,7 @@ type LabelInfo struct {
 	Value int
 	// DefaultValue is the default voting value for the label. This value may be outside the
 	// range specified in PermittedLabels.
-	DefaultValue string
+	DefaultValue string `json:"default_value"`
 
 	// ----------------------------------------------------------------------------
 	// The following fields are only set when DescribeDetailedLabels is requested.
@@ -96,7 +96,7 @@ type ApprovalInfo struct {
 	// PermittedVotingRange is the VotingRangeInfo the user is authorized to vote on that
 	// label. If present, the user is permitted to vote on the label regarding the range
 	// values. If absent, the user is not permitted to vote on that label.
-	PermittedVotingRange VotingRangeInfo
+	PermittedVotingRange VotingRangeInfo `json:"permitted_voting_range"`
 	// Date is the time and date describing when the approval was made.
 	Date string
 	// Tag is the value of the tag field from ReviewInput set while posting the review.
@@ -105,7 +105,7 @@ type ApprovalInfo struct {
 	// of the REST call are required.
 	Tag string
 	// PostSubmit indicates that this vote was made after the change was submitted.
-	PostSubmit bool `json:",omitempty"`
+	PostSubmit bool `json:"post_submit,omitempty"`
 }
 
 // VotingRangeInfo describes the continuous voting range from min to max values.
@@ -134,7 +134,7 @@ type ChangeInfo struct {
 	// enabled).
 	Hashtags []string
 	// ChangeID is the Change-ID of the change.
-	ChangeID string
+	ChangeID string `json:"change_id"`
 	// Subject is the subject of the change (header line of the commit message).
 	Subject string
 	// Status is the status of the change ("NEW"/"MERGED"/"ABANDONED").
@@ -171,10 +171,10 @@ type ChangeInfo struct {
 	Deletions int
 	// TotalCommentCount is the total number of inline comments across all patch sets. Not set
 	// if the current change index doesn't have the data.
-	TotalCommentCount int
+	TotalCommentCount int `json:"total_comment_count"`
 	// UnresolvedCommentCount is the number of unresolved inline comment threads across all
 	// patch sets. Not set if the current change index doesn't have the data.
-	UnresolvedCommentCount int
+	UnresolvedCommentCount int `json:"unresolved_comment_count"`
 	// Number is the legacy numeric ID of the change.
 	Number int `json:"_number,omitempty"`
 	// Owner is the owner of the change.
@@ -189,10 +189,10 @@ type ChangeInfo struct {
 	Labels map[string]LabelInfo
 	// PermittedLabels is a map of the permitted labels that maps a label name to the list of
 	// values that are allowed for that label. Only set if DescribeDetailedLabels is requested.
-	PermittedLabels map[string][]string
+	PermittedLabels map[string][]string `json:"permitted_labels"`
 	// RemovableReviewers is the reviewers that can be removed by the calling user as a list of
 	// AccountInfo entities. Only set if DescribeDetailedLabels is requested.
-	RemovableReviewers []AccountInfo
+	RemovableReviewers []AccountInfo `json:"removable_reviewers"`
 	// Reviewers is a map that maps a reviewer state to a list of AccountInfo entities. Possible
 	// reviewer states are "REVIEWER", "CC", and "REMOVED". Only set if DescribeDetailedLabels
 	// is requested.
@@ -201,16 +201,16 @@ type ChangeInfo struct {
 	// WIP state. Only present on WIP changes and only if there are pending reviewer updates to
 	// report. These are reviewers who have not yet been notified about being added to or
 	// removed from the change.
-	PendingReviewers map[string]AccountInfo
+	PendingReviewers map[string]AccountInfo `json:"pending_reviewers"`
 	// ReviewerUpdates is updates to Reviewers set for the change as ReviewerUpdateInfo
 	// entities. Only set if DescribeReviewerUpdates is requested and if NoteDb is enabled.
-	ReviewerUpdates []ReviewerUpdateInfo
+	ReviewerUpdates []ReviewerUpdateInfo `json:"reviewer_updates"`
 	// Messages is messages associated with the change as a list of ChangeMessageInfo
 	// entities. Only set if DescribeMessages is requested.
 	Messages []ChangeMessageInfo
 	// CurrentRevision is the commit ID of the current patch set of this change. Only set if
 	// DescribeCurrentRevision or DescribeAllRevisions are requested.
-	CurrentRevision string
+	CurrentRevision string `json:"current_revision"`
 	// Revisions is all patch sets of this change as a map that maps the commit ID of the
 	// patch set to a RevisionInfo entity. Only set if DescribeCurrentRevision is requested
 	// (in which case it will only contain a key for the current revision) or if
@@ -226,14 +226,14 @@ type ChangeInfo struct {
 	// change. Only set if DescribeCheck is requested.
 	Problems []ProblemInfo
 	// IsPrivate indicates whether the change is marked as private.
-	IsPrivate bool
+	IsPrivate bool `json:"is_private"`
 	// WorkInProgress indicates whether the change is marked as Work In Progress.
-	WorkInProgress bool
+	WorkInProgress bool `json:"work_in_progress"`
 	// HasReviewStarted indicates whether the change has been marked Ready at some point in
 	// time.
-	HasReviewStarted bool
+	HasReviewStarted bool `json:"has_review_started"`
 	// RevertOf gives the numeric Change-Id of the change that this change reverts.
-	RevertOf string `json:",omitempty"`
+	RevertOf string `json:"revert_of,omitempty"`
 }
 
 // ActionInfo describes a REST API call the client can make to manipulate a resource. These are
@@ -259,7 +259,7 @@ type Requirement struct {
 	// Status is the status of the requirement. Can be either "OK", "NOT_READY" or "RULE_ERROR".
 	Status string
 	// FallbackText is a human readable reason.
-	FallbackText string
+	FallbackText string `json:"fallback_text"`
 	// Type is an alphanumerical (plus hyphens or underscores) string to identify what the
 	// requirement is and why it was triggered. Can be seen as a class: requirements sharing
 	// the same type were created for a similar reason, and the data structure will follow one
@@ -276,7 +276,7 @@ type ReviewerUpdateInfo struct {
 	Updated string
 	// UpdatedBy is the account which modified state of the reviewer in question as AccountInfo
 	// entity.
-	UpdatedBy AccountInfo
+	UpdatedBy AccountInfo `json:"updated_by"`
 	// Reviewer is the reviewer account added or removed from the change as an AccountInfo
 	// entity.
 	Reviewer *AccountInfo
@@ -301,7 +301,7 @@ type ChangeMessageInfo struct {
 	Author AccountInfo
 	// RealAuthor is the real author of the message as an AccountInfo entity. Set if the
 	// message was posted on behalf of another user.
-	RealAuthor *AccountInfo
+	RealAuthor *AccountInfo `json:"real_author"`
 	// Date is the timestamp this message was posted.
 	Date string
 	// Message is the text left by the user.
@@ -348,12 +348,12 @@ type RevisionInfo struct {
 	// MessageWithFooter contains the full commit message with Gerrit-specific commit footers,
 	// as if this revision were submitted using the Cherry Pick submit type. Only set when
 	// the DescribeCommitFooters option is requested and when this is the current patch set.
-	MessageWithFooter string
+	MessageWithFooter string `json:"message_with_footer"`
 	// PushCertificate contains the push certificate provided by the user when uploading this
 	// patch set as a PushCertificateInfo entity. This field is set if and only if the
 	// DescribePushCertificates option is requested; if no push certificate was provided, it
 	// is set to an empty object.
-	PushCertificate *PushCertificateInfo
+	PushCertificate *PushCertificateInfo `json:"push_certificate"`
 	// Description is the description of this patchset, as displayed in the patchset selector
 	// menu. May be empty if no description is set.
 	Description string
@@ -409,7 +409,7 @@ type CommitInfo struct {
 	// Message is the commit message.
 	Message string
 	// WebLinks is links to the commit in external sites as a list of WebLinkInfo entities.
-	WebLinks []WebLinkInfo
+	WebLinks []WebLinkInfo `json:"web_links"`
 }
 
 // The FileInfo entity contains information about a file in a patch set.
@@ -420,17 +420,17 @@ type FileInfo struct {
 	// Binary indicates Whether the file is binary.
 	Binary bool
 	// OldPath is the old file path. Only set if the file was renamed or copied.
-	OldPath string
+	OldPath string `json:"old_path"`
 	// LinesInserted is the number of inserted lines. Not set for binary files or if no lines
 	// were inserted. An empty last line is not included in the count and hence this number can
 	// differ by one from details provided in DiffInfo.
-	LinesInserted int
+	LinesInserted int `json:"lines_inserted"`
 	// LinesDeleted is the number of deleted lines. Not set for binary files or if no lines
 	// were deleted. An empty last line is not included in the count and hence this number can
 	// differ by one from details provided in DiffInfo.
-	LinesDeleted int
+	LinesDeleted int `json:"lines_deleted"`
 	// SizeDelta is the number of bytes by which the file size increased/decreased.
-	SizeDelta int
+	SizeDelta int `json:"size_delta"`
 	// Size is the file size in bytes.
 	Size int
 }
@@ -465,7 +465,7 @@ type WebLinkInfo struct {
 	// URL is the link URL.
 	URL string
 	// ImageURL is the URL to the icon of the link.
-	ImageURL string
+	ImageURL string `json:"image_url"`
 }
 
 // GpgKeyInfo contains information about a GPG public key.
@@ -477,7 +477,7 @@ type GpgKeyInfo struct {
 	Fingerprint string
 	// UserIDs is a list of OpenPGP User IDs associated with the public key. Not set for
 	// deleted keys.
-	UserIDs []string
+	UserIDs []string `json:"user_ids"`
 	// Key is ASCII armored public key material. Not set for deleted keys.
 	Key string
 	// Status is the result of server-side checks on the key; one of "BAD", "OK", or "TRUSTED".
@@ -495,7 +495,7 @@ type GpgKeyInfo struct {
 type CommentInfo struct {
 	// PatchSet is the patch set number for the comment; only set in contexts where comments
 	// may be returned for multiple patch sets.
-	PatchSet int
+	PatchSet int `json:"patch_set"`
 	// ID is the URL encoded UUID of the comment.
 	ID string
 	// Path is the path of the file for which the inline comment was done. Not set if returned
@@ -513,7 +513,7 @@ type CommentInfo struct {
 	// Range is the range of the comment as a CommentRange entity.
 	Range *CommentRange
 	// InReplyTo is the URL encoded UUID of the comment to which this comment is a reply.
-	InReplyTo string
+	InReplyTo string `json:"in_reply_to"`
 	// Message is the comment message.
 	Message string
 	// Updated is the timestamp of when this comment was written.
@@ -541,13 +541,13 @@ type CommentInfo struct {
 // end_line set to 5 and end_character equal to 0 will not include any characters on line 5.
 type CommentRange struct {
 	// StartLine is the start line number of the range. (1-based)
-	StartLine int
+	StartLine int `json:"start_line"`
 	// StartLine is the character position in the start line. (0-based)
-	StartCharacter int
+	StartCharacter int `json:"start_character"`
 	// EndLine is the end line number of the range. (1-based)
-	EndLine int
+	EndLine int `json:"end_line"`
 	// EndCharacter is the character position in the end line. (0-based)
-	EndCharacter int
+	EndCharacter int `json:"end_character"`
 }
 
 const TimeLayout = "2006-01-02 15:04:05.000000000"
