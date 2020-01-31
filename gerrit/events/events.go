@@ -88,14 +88,14 @@ type AssigneeChangedEvent struct {
 	Base
 	Change      Change
 	Changer     Account
-	OldAssignee Account
+	OldAssignee Account `json:"oldAssignee"`
 }
 
 // ChangeAbandonedEvent is sent when a change has been abandoned.
 type ChangeAbandonedEvent struct {
 	Base
 	Change    Change
-	PatchSet  PatchSet
+	PatchSet  PatchSet `json:"patchSet"`
 	Abandoner Account
 	Reason    string
 }
@@ -104,16 +104,16 @@ type ChangeAbandonedEvent struct {
 type ChangeMergedEvent struct {
 	Base
 	Change    Change
-	PatchSet  PatchSet
+	PatchSet  PatchSet `json:"patchSet"`
 	Submitter Account
-	NewRev    string
+	NewRev    string `json:"newRev"`
 }
 
 // ChangeRestoredEvent is sent when an abandoned change has been restored.
 type ChangeRestoredEvent struct {
 	Base
 	Change   Change
-	PatchSet PatchSet
+	PatchSet PatchSet `json:"patchSet"`
 	Restorer Account
 	Reason   string
 }
@@ -122,7 +122,7 @@ type ChangeRestoredEvent struct {
 type CommentAddedEvent struct {
 	Base
 	Change    Change
-	PatchSet  PatchSet
+	PatchSet  PatchSet `json:"patchSet"`
 	Author    Account
 	Approvals []Approval
 	Comment   string
@@ -146,8 +146,8 @@ type HashtagsChangedEvent struct {
 // ProjectCreatedEvent is sent when a new project has been created.
 type ProjectCreatedEvent struct {
 	Base
-	ProjectName string
-	ProjectHead string
+	ProjectName string `json:"projectName"`
+	ProjectHead string `json:"projectHead"`
 }
 
 // PatchSetCreatedEvent is sent when a new change has been uploaded, or a new patchset has been
@@ -155,7 +155,7 @@ type ProjectCreatedEvent struct {
 type PatchSetCreatedEvent struct {
 	Base
 	Change   Change
-	PatchSet PatchSet
+	PatchSet PatchSet `json:"patchSet"`
 	Uploader Account
 }
 
@@ -165,21 +165,21 @@ type RefUpdatedEvent struct {
 	Submitter Account
 	RefUpdate struct {
 		// OldRev is the old value of the ref, prior to the update.
-		OldRev string
+		OldRev string `json:"oldRev"`
 		// NewRev is the new value the ref was updated to.
-		NewRev string
+		NewRev string `json:"newRev"`
 		// RefName is the full ref name within project.
-		RefName string
+		RefName string `json:"refName"`
 		// Project is the project path within Gerrit.
 		Project string
-	}
+	} `json:"refUpdate"`
 }
 
 // ReviewerAddedEvent is sent when a reviewer is added to a change.
 type ReviewerAddedEvent struct {
 	Base
 	Change   Change
-	PatchSet PatchSet
+	PatchSet PatchSet `json:"patchSet"`
 	Reviewer Account
 }
 
@@ -187,7 +187,7 @@ type ReviewerAddedEvent struct {
 type ReviewerDeletedEvent struct {
 	Base
 	Change    Change
-	PatchSet  PatchSet
+	PatchSet  PatchSet `json:"patchSet"`
 	Reviewer  Account
 	Remover   Account
 	Approvals []Approval
@@ -199,14 +199,14 @@ type TopicChangedEvent struct {
 	Base
 	Change   Change
 	Changer  Account
-	OldTopic string
+	OldTopic string `json:"oldTopic"`
 }
 
 // VoteDeletedEvent is sent when a vote was removed from a change.
 type VoteDeletedEvent struct {
 	Base
 	Change    Change
-	PatchSet  PatchSet
+	PatchSet  PatchSet `json:"patchSet"`
 	Reviewer  Account
 	Remover   Account
 	Approvals []Approval
@@ -217,7 +217,7 @@ type VoteDeletedEvent struct {
 type WipStateChangedEvent struct {
 	Base
 	Changer  Account
-	PatchSet PatchSet
+	PatchSet PatchSet `json:"oldTopic"`
 	Change   Change
 	RefName  string
 }

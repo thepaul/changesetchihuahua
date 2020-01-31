@@ -34,11 +34,11 @@ type Change struct {
 	// URL gives the canonical URL to reach this change.
 	URL string
 	// CommitMessage gives the full commit message for the current patchset.
-	CommitMessage string
+	CommitMessage string `json:"commitMessage"`
 	// CreatedOn gives the time since the UNIX epoch when this change was created.
-	CreatedOn int64
+	CreatedOn int64 `json:"createdOn"`
 	// LastUpdated gives the time since the UNIX epoch when this change was last updated.
-	LastUpdated int64
+	LastUpdated int64 `json:"lastUpdated"`
 	// Open indicates whether the change is still open for review.
 	Open bool
 	// Status indicates the current state of this change ("NEW"/"MERGED"/"ABANDONED").
@@ -52,19 +52,19 @@ type Change struct {
 		System string
 		// ID is the ID number as scraped.
 		ID string
-	}
+	} `json:"trackingIds"`
 	// CurrentPatchSet gives the current patchset for this change.
-	CurrentPatchSet PatchSet
+	CurrentPatchSet PatchSet `json:"currentPatchSet"`
 	// PatchSets holds all patchsets for this change.
-	PatchSets []PatchSet
+	PatchSets []PatchSet `json:"patchSets"`
 	// DependsOn is a list of changes on which this change depends.
-	DependsOn []Dependency
+	DependsOn []Dependency `json:"dependsOn"`
 	// NeededBy is a list of changes which depend on this change.
-	NeededBy []Dependency
+	NeededBy []Dependency `json:"neededBy"`
 	// SubmitRecords has information on whether this change has been or can be submitted.
-	SubmitRecords []SubmitRecord
+	SubmitRecords []SubmitRecord `json:"submitRecords"`
 	// AllReviewers is a list of reviewers added to this change.
-	AllReviewers []Account
+	AllReviewers []Account `json:"allReviewers"`
 
 	// WIP indicates whether this change is currently marked as a Work In Progress.
 	// (This isn't in the docs; gleaned from received events.)
@@ -112,7 +112,7 @@ type PatchSet struct {
 	// Author is the author of the patchset.
 	Author Account
 	// CreatedOn is the time in seconds since the UNIX epoch when this patchset was created.
-	CreatedOn int64
+	CreatedOn int64 `json:"createdOn"`
 	// Kind is the kind of change uploaded ("REWORK"/"TRIVIAL_REBASE"/"MERGE_FIRST_PARENT_UPDATE"/
 	// "NO_CODE_CHANGE"/"NO_CHANGE").
 	Kind string
@@ -123,9 +123,9 @@ type PatchSet struct {
 	// Files gives all changed files in this patchset.
 	Files []FilePatch
 	// SizeInsertions gives size information of insertions of this patchset.
-	SizeInsertions int
+	SizeInsertions int `json:"sizeInsertions"`
 	// SizeDeletions gives size information of deletions of this patchset.
-	SizeDeletions int
+	SizeDeletions int `json:"sizeDeletions"`
 }
 
 // Approval records a code review approval granted to a patchset.
@@ -137,10 +137,10 @@ type Approval struct {
 	// Value is the value assigned by the approval, usually a numerical score.
 	Value string
 	// OldValue is the previous approval score, usually a numerical score.
-	OldValue string
+	OldValue string `json:"oldValue"`
 	// GrantedOn is the time in seconds since the UNIX epoch when this approval was added or last
 	// updated.
-	GrantedOn int64
+	GrantedOn int64 `json:"grantedOn"`
 	// By is the reviewer of the patchset.
 	By Account
 }
@@ -148,12 +148,12 @@ type Approval struct {
 // RefUpdate is information about a ref that was updated.
 type RefUpdate struct {
 	// OldRev is the old value of the ref, prior to the update.
-	OldRev string
+	OldRev string `json:"oldRev"`
 	// NewRev is the new value the ref was updated to. Zero value
 	// ("0000000000000000000000000000000000000000") indicates that the ref was deleted.
-	NewRev string
+	NewRev string `json:"newRev"`
 	// RefName is the full rev name within project.
-	RefName string
+	RefName string `json:"refName"`
 	// Project is the project path in Gerrit.
 	Project string
 }
@@ -171,7 +171,7 @@ type SubmitRecord struct {
 // Requirement gives information about a requirement in order to submit a change.
 type Requirement struct {
 	// FallbackText is a human readable description of the requirement.
-	FallbackText string
+	FallbackText string `json:"fallbackText"`
 	// Type is an alphanumerical (plus hyphens or underscores) string to identify what the
 	// requirement is and why is was triggered. Can be seen as a class: requirements sharing the
 	// same type were created for a similar reason, and the data structure will follow one set of
@@ -203,7 +203,7 @@ type Dependency struct {
 	// Ref is the ref name.
 	Ref string
 	// IsCurrentPatchSet indicates if the revision is the current patchset of the change.
-	IsCurrentPatchSet bool
+	IsCurrentPatchSet bool `json:"isCurrentPatchSet"`
 }
 
 // Message is a comment added on a change by a reviewer.
@@ -233,7 +233,7 @@ type FilePatch struct {
 	// File is the name of the file. If the file is renamed, the new name.
 	File string
 	// FileOld is the old name of the file, if the file is renamed.
-	FileOld string
+	FileOld string `json:"fileOld"`
 	// Type is the type of change ("ADDED"/"MODIFIED"/"DELETED"/"RENAMED"/"COPIED"/"REWRITE")
 	Type string
 	// Insertions is the number of insertions of this patch.
