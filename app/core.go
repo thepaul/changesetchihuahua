@@ -1373,7 +1373,8 @@ changeLoop:
 				// more reviewers are needed. Otherwise, let the owner deal with
 				// it.
 				if len(didntVoteMax) == 0 {
-					waitingMsg = "needs more reviewers"
+					ownerLink := a.prepareUserLink(ctx, accountFromAccountInfo(&change.Owner))
+					waitingMsg = fmt.Sprintf("Waiting on %s to add additional reviewers", ownerLink)
 				} else {
 					continue changeLoop
 				}
