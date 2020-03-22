@@ -196,6 +196,10 @@ func (a *App) GerritEvent(ctx context.Context, event events.GerritEvent) {
 	switch ev := event.(type) {
 	case *events.CommentAddedEvent:
 		a.CommentAdded(ctx, ev.Author, ev.Change, ev.PatchSet, ev.Comment, ev.EventCreatedAt())
+	case *events.VoteDeletedEvent:
+		for _, approval := range ev.Approvals {
+			a.VoteDeleted(ctx, ev.Reviewer, ev.Remover, ev.Change, ev.PatchSet, approval)
+		}
 	case *events.ReviewerAddedEvent:
 		a.ReviewerAdded(ctx, ev.Reviewer, ev.Change, ev.EventCreatedAt())
 	case *events.PatchSetCreatedEvent:
@@ -685,6 +689,41 @@ func (a *App) CommentAdded(ctx context.Context, author events.Account, change ev
 			})
 		}
 	})
+}
+
+func (a *App) VoteDeleted(ctx context.Context, reviewer events.Account, remover events.Account, change events.Change, patchSet events.PatchSet, approval events.Approval) {
+	owner := &change.Owner
+	removerLink := a.prepareUserLink(ctx, &remover)
+	reviewerLink := a.prepareUserLink(ctx, &reviewer)
+	changeLink := a.formatChangeLink(&change)
+	voteDesc := approval.Description
+	if !strings.HasPrefix(approval.OldValue, "-") && !strings.HasPrefix(approval.OldValue, "+") {
+		voteDesc += "+"
+	}
+	voteDesc += approval.OldValue
+
+	var wg waitGroup
+	defer wg.Wait()
+
+	wg.Go(func() {
+		a.generalNotify(ctx, fmt.Sprintf("%s removed %s vote from %s on %s patchset %d", remover.DisplayName(), voteDesc, reviewer.DisplayName(), changeLink, patchSet.Number))
+	})
+
+	if owner.Username != remover.Username {
+		wg.Go(func() {
+			if owner.Username == reviewer.Username {
+				a.notify(ctx, owner, fmt.Sprintf("%s removed your %s vote on your change %s patchset %d", removerLink, voteDesc, changeLink, patchSet.Number))
+			} else {
+				a.notify(ctx, owner, fmt.Sprintf("%s removed %s vote from %s on your change %s patchset %d", removerLink, voteDesc, reviewerLink, changeLink, patchSet.Number))
+			}
+		})
+	}
+
+	if reviewer.Username != remover.Username && reviewer.Username != owner.Username {
+		wg.Go(func() {
+			a.notify(ctx, &reviewer, fmt.Sprintf("%s removed your %s vote on %s patchset %d", removerLink, voteDesc, changeLink, patchSet.Number))
+		})
+	}
 }
 
 type byPathLineAndTime []*gerrit.CommentInfo
