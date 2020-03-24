@@ -71,7 +71,7 @@ type LabelInfo struct {
 	Value int
 	// DefaultValue is the default voting value for the label. This value may be outside the
 	// range specified in PermittedLabels.
-	DefaultValue string `json:"default_value"`
+	DefaultValue int `json:"default_value"`
 
 	// ----------------------------------------------------------------------------
 	// The following fields are only set when DescribeDetailedLabels is requested.
