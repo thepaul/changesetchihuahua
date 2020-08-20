@@ -71,6 +71,7 @@ type configItem struct {
 var configItems = []configItem{
 	{Name: "gerrit-address", Description: "URL to your Gerrit server (e.g. `https://gerrit-review.googlesource.com/`)", ItemType: ConfigItemLink},
 	{Name: "admin-ids", Description: "comma-separated list of chat IDs of admins", ItemType: ConfigItemUserList},
+	{Name: "blocklist-ids", Description: "comma-separated list of chat IDs of users to avoid messaging", ItemType: ConfigItemUserList},
 	{Name: "remove-project-prefix", Description: "a common prefix on project names which can be removed if present before displaying in links (e.g., `myCompany/`)", ItemType: ConfigItemString},
 	{Name: "global-notify-channel", Description: "A channel to which all generally-applicable notifications should be sent", ItemType: ConfigItemChannel},
 	{Name: "global-report-channel", Description: "A channel to which a daily report will be sent, noting which change sets have been waiting too long and who they're waiting for", ItemType: ConfigItemChannel},
