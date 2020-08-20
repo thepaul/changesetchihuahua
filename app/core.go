@@ -432,6 +432,13 @@ func (a *App) isAdminUser(ctx context.Context, chatID string) bool {
 	return ok
 }
 
+func (a *App) isBlocklisted(ctx context.Context, chatID string) bool {
+	blocklist := a.persistentDB.JustGetConfig(ctx, "blocklist-ids", "")
+	blockUsers := parseUserSet(blocklist)
+	_, ok := blockUsers[chatID]
+	return ok
+}
+
 // getNewInlineComments fetches _all_ inline comments for the specified change and patchset
 // (because apparently that's the only way we can do it), and puts them all in the allInline map.
 // It then identifies those inline comments which were posted by the given gerrit user and after
@@ -1147,6 +1154,12 @@ func (a *App) notifyAllReviewers(ctx context.Context, changeID, msg string, exce
 func (a *App) notify(ctx context.Context, gerritUser *events.Account, message string) messages.MessageHandle {
 	chatID := a.lookupGerritUser(ctx, gerritUser)
 	if chatID == "" {
+		return nil
+	}
+	if a.isBlocklisted(ctx, chatID) {
+		a.logger.Debug("suppressing message due to blocklist",
+			zap.String("chat-id", chatID),
+			zap.String("gerrit-username", gerritUser.Username))
 		return nil
 	}
 	msgHandle, err := a.chat.SendNotification(ctx, chatID, message)
