@@ -1495,6 +1495,11 @@ func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now,
 	}
 	logger = logger.With(zap.String("chat-id", chatUser.ChatId))
 
+	if a.isBlocklisted(ctx, chatUser.ChatId) {
+		logger.Debug("not sending personal report to blocklisted user")
+		return
+	}
+
 	// check last report time
 	if chatUser.LastReport != nil && chatUser.LastReport.After(cutOffTime) {
 		logger.Info("Skipping report for user due to recent report",
