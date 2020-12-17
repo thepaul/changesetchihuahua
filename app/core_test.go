@@ -25,7 +25,7 @@ import (
 	"github.com/jtolds/changesetchihuahua/slack"
 )
 
-//go:generate mockgen -destination messages_mocks_test.go -package app_test github.com/jtolds/changesetchihuahua/messages ChatSystem
+//go:generate mockgen -destination messages_mocks_test.go -package app_test github.com/jtolds/changesetchihuahua/slack EventedChatSystem
 //go:generate mockgen -destination gerrit_mocks_test.go -package app_test github.com/jtolds/changesetchihuahua/gerrit Client
 
 type testSystem struct {
@@ -33,7 +33,7 @@ type testSystem struct {
 	Ctx         context.Context
 	DB          *app.PersistentDB
 	Controller  *gomock.Controller
-	MockChat    *MockChatSystem
+	MockChat    *MockEventedChatSystem
 	App         *app.App
 	MockGerrit  *MockClient
 	SkipClose   bool
@@ -163,7 +163,7 @@ func testWithMockChat(t *testing.T, config map[string]string, testFunc func(*tes
 		require.NoError(t, err)
 	}
 
-	m := NewMockChatSystem(ctrl)
+	m := NewMockEventedChatSystem(ctrl)
 
 	m.EXPECT().
 		SetIncomingMessageCallback(gomock.Any()).

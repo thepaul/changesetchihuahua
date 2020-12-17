@@ -49,12 +49,35 @@ func (ws *uiWebState) slackRedirectURL() string {
 	return redirectURL.String()
 }
 
-func (ws *uiWebState) Setup(w http.ResponseWriter, r *http.Request) {
+func (ws *uiWebState) Setup(w http.ResponseWriter, _ *http.Request) {
 	html := fmt.Sprintf(slack.AddToSlackButton, slack.AssembleSlackAuthURL(ws.slackRedirectURL()))
 	header := w.Header()
 	header.Add("Content-Length", strconv.Itoa(len(html)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(html))
+}
+
+func (ws *uiWebState) HandleChatEvent(w http.ResponseWriter, r *http.Request) {
+	limited := io.LimitedReader{R: r.Body, N: events.MaxEventPayloadSize}
+	body, err := ioutil.ReadAll(&limited)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	err = ws.governor.VerifyAndHandleChatEvent(r.Header, body)
+	if err != nil {
+		logger := ws.logger.With(zap.Error(err), zap.Any("headers", r.Header), zap.ByteString("event-body", body))
+		if _, ok := err.(*slack.BadEvent); ok {
+			logger.Info("Bad chat event received")
+			w.WriteHeader(http.StatusBadRequest)
+		} else if err == slack.VerifyError {
+			logger.Warn("Could not verify event")
+			w.WriteHeader(http.StatusUnauthorized)
+		} else {
+			logger.Error("Failed to handle chat event")
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}
 }
 
 func (ws *uiWebState) maybeOAuthRedirect(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +142,7 @@ func newUIWebHandler(logger *zap.Logger, state *uiWebState, isSecure bool) http.
 	if isSecure {
 		mux.HandleFunc("/slack/", state.maybeOAuthRedirect)
 		mux.HandleFunc("/slack/setup", state.Setup)
+		mux.HandleFunc("/slack/events", state.HandleChatEvent)
 	}
 	return mux
 }

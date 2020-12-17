@@ -19,6 +19,7 @@ import (
 	"github.com/jtolds/changesetchihuahua/gerrit"
 	"github.com/jtolds/changesetchihuahua/gerrit/events"
 	"github.com/jtolds/changesetchihuahua/messages"
+	"github.com/jtolds/changesetchihuahua/slack"
 )
 
 const (
@@ -84,7 +85,7 @@ var configItems = []configItem{
 
 type App struct {
 	logger       *zap.Logger
-	chat         messages.ChatSystem
+	chat         slack.EventedChatSystem
 	fmt          messages.ChatSystemFormatter
 	persistentDB *PersistentDB
 
@@ -102,7 +103,7 @@ type App struct {
 	removeProjectPrefix string
 }
 
-func New(ctx context.Context, logger *zap.Logger, chat messages.ChatSystem, chatFormatter messages.ChatSystemFormatter, persistentDB *PersistentDB, gerritConnector gerritConnector) *App {
+func New(ctx context.Context, logger *zap.Logger, chat slack.EventedChatSystem, chatFormatter messages.ChatSystemFormatter, persistentDB *PersistentDB, gerritConnector gerritConnector) *App {
 	app := &App{
 		logger:             logger,
 		chat:               chat,
@@ -223,6 +224,21 @@ func (a *App) GerritEvent(ctx context.Context, event events.GerritEvent) {
 	case *events.ReviewerDeletedEvent:
 	default:
 		a.logger.Error("unknown event type", zap.String("event-type", event.GetType()))
+	}
+}
+
+func (a *App) ChatEvent(ctx context.Context, eventObj slack.ChatEvent) {
+	err := a.chat.HandleEvent(ctx, eventObj)
+	if err != nil {
+		if err == slack.StopTeam {
+			a.logger.Info("uninstalled. shutting down app for team")
+			err = a.Close()
+			if err != nil {
+				a.logger.Error("failed to shut down app for team")
+			}
+			return
+		}
+		a.logger.Error("failed to handle event from chat system", zap.Error(err))
 	}
 }
 

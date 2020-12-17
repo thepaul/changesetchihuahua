@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"flag"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -36,12 +37,11 @@ type Governor struct {
 
 type Team struct {
 	id        string
-	ctx       context.Context
-	canceler  context.CancelFunc
 	logger    *zap.Logger
-	errGroup  errgroup.Group
+	canceler  context.CancelFunc
 	teamApp   *app.App
-	slackConn slack.EventedChatSystem
+	setupData string
+	runError  error
 }
 
 type vanillaGerritConnector struct{}
@@ -116,7 +116,14 @@ func (g *Governor) NewTeam(teamID string, setupData string) error {
 	if err := g.appendTeamDefinition(teamID, setupData); err != nil {
 		return errs.New("could not add team definition: %v", err)
 	}
-	return g.startTeam(teamID, setupData)
+	team := &Team{
+		id:        teamID,
+		setupData: setupData,
+		logger:    g.logger.Named(teamID),
+	}
+	g.teams[teamID] = team
+	go team.Run(g.topContext)
+	return nil
 }
 
 func (g *Governor) StartTeam(teamID, setupData string) error {
@@ -126,68 +133,56 @@ func (g *Governor) StartTeam(teamID, setupData string) error {
 	if _, ok := g.teams[teamID]; ok {
 		return errs.New("team %s is already active", teamID)
 	}
-	return g.startTeam(teamID, setupData)
-}
-
-// must be called with teamsLock held
-func (g *Governor) startTeam(teamID, setupData string) error {
-	team, err := g.addTeam(teamID, setupData)
-	if err != nil {
-		return err
+	team := &Team{
+		id:        teamID,
+		setupData: setupData,
+		logger:    g.logger.Named(teamID),
 	}
-	team.errGroup.Go(func() error {
-		return team.slackConn.HandleEvents(team.ctx)
-	})
-	team.errGroup.Go(func() error {
-		return team.teamApp.PeriodicGlobalReport(team.ctx, time.Now)
-	})
-	team.errGroup.Go(func() error {
-		return team.teamApp.PeriodicPersonalReports(team.ctx, time.Now)
-	})
-	go func() {
-		err := team.errGroup.Wait()
-		team.logger.Info("Team errgroup exited", zap.String("team-id", team.id), zap.Error(err))
-		err = team.Close()
-		if err != nil {
-			team.logger.Error("failed to close team", zap.Error(err))
-		}
-	}()
+	g.teams[teamID] = team
+	go team.Run(g.topContext)
 	return nil
 }
 
-func (g *Governor) addTeam(teamID, setupData string) (team *Team, err error) {
-	teamLogger := g.logger.Named(teamID)
-	ctx, cancel := context.WithCancel(g.topContext)
+func (t *Team) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	defer func() {
-		if err != nil {
-			cancel()
+		if t.runError != nil {
+			t.logger.Error("Failed to run", zap.Error(t.runError))
 		}
 	}()
 
-	slackConn, err := slack.NewSlackInterface(ctx, teamLogger.Named("chat"), setupData)
+	slackClient, err := slack.NewSlackInterface(t.logger.Named("chat"), t.setupData)
 	if err != nil {
-		return nil, errs.New("could not initialize slack connection: %v", err)
+		t.runError = errs.New("could not initialize slack connection: %v", err)
+		return
 	}
-	teamDBSource, err := addSearchPath(*persistentDBSource, "team-"+teamID)
+	teamDBSource, err := addSearchPath(*persistentDBSource, "team-"+t.id)
 	if err != nil {
-		return nil, errs.New("could not parse %q: %v", *persistentDBSource, err)
+		t.runError = errs.New("could not parse %q: %v", *persistentDBSource, err)
+		return
 	}
-	persistentDB, err := app.NewPersistentDB(teamLogger.Named("db"), teamDBSource)
+	persistentDB, err := app.NewPersistentDB(t.logger.Named("db"), teamDBSource)
 	if err != nil {
-		return nil, errs.New("could not open db: %v", err)
+		t.runError = errs.New("could not open db: %v", err)
+		return
 	}
-	thisApp := app.New(ctx, teamLogger, slackConn, &slack.Formatter{}, persistentDB, vanillaGerritConnector{})
+	t.teamApp = app.New(ctx, t.logger, slackClient, &slack.Formatter{}, persistentDB, vanillaGerritConnector{})
 
-	team = &Team{
-		id:        teamID,
-		ctx:       ctx,
-		canceler:  cancel,
-		logger:    teamLogger,
-		teamApp:   thisApp,
-		slackConn: slackConn,
+	var errGroup errgroup.Group
+	errGroup.Go(func() error {
+		return t.teamApp.PeriodicGlobalReport(ctx, time.Now)
+	})
+	errGroup.Go(func() error {
+		return t.teamApp.PeriodicPersonalReports(ctx, time.Now)
+	})
+	err = errGroup.Wait()
+	t.logger.Info("Team errgroup exited", zap.String("team-id", t.id), zap.Error(err))
+	err = t.Close()
+	if err != nil {
+		t.logger.Error("failed to close team", zap.Error(err))
 	}
-	g.teams[teamID] = team
-	return team, nil
 }
 
 func (g *Governor) GerritEventReceived(teamID string, event events.GerritEvent) {
@@ -200,11 +195,28 @@ func (g *Governor) GerritEventReceived(teamID string, event events.GerritEvent) 
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), *notificationTimeout)
+		ctx, cancel := context.WithTimeout(g.topContext, *notificationTimeout)
 		defer cancel()
 
 		team.teamApp.GerritEvent(ctx, event)
 	}()
+}
+
+func (g *Governor) VerifyAndHandleChatEvent(header http.Header, messageBody []byte) error {
+	event, teamID, err := slack.VerifyEventMessage(header, messageBody)
+	if err != nil {
+		return err
+	}
+	g.teamsLock.Lock()
+	team, ok := g.teams[teamID]
+	g.teamsLock.Unlock()
+	if !ok {
+		g.logger.Info("received chat event for unknown team", zap.String("team-id", teamID), zap.Any("event", event))
+		return nil
+	}
+
+	go team.teamApp.ChatEvent(g.topContext, event)
+	return nil
 }
 
 func (g *Governor) appendTeamDefinition(teamID, setupData string) (err error) {

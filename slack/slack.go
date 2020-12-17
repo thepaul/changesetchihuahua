@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/slackutilsx"
 	"github.com/zeebo/errs"
 	"go.uber.org/zap"
@@ -23,6 +25,7 @@ import (
 var (
 	ClientID      = flag.String("slack-client-id", "13639549360.893676519079", "ID issued to this app by Slack")
 	ClientSecret  = flag.String("slack-client-secret", "", "Client secret issued to this app by Slack")
+	SigningSecret = flag.String("slack-signing-secret", "", "Signing secret issued to this app by Slack")
 	debugSlackLib = flag.Bool("debug-slack-lib", false, "Log debug information from Slack client library")
 )
 
@@ -42,7 +45,6 @@ var userScopes = []string{
 
 type slackInterface struct {
 	api *slack.Client
-	rtm *slack.RTM
 
 	rootLogger *zap.Logger
 	logger     *zap.Logger
@@ -64,13 +66,17 @@ func (lw logWrapper) Output(callDepth int, s string) error {
 	return nil
 }
 
+type ChatEvent struct {
+	slackEvent *slackevents.EventsAPIEvent
+}
+
 type EventedChatSystem interface {
 	messages.ChatSystem
 
-	HandleEvents(ctx context.Context) error
+	HandleEvent(ctx context.Context, event ChatEvent) error
 }
 
-func NewSlackInterface(ctx context.Context, logger *zap.Logger, setupData string) (EventedChatSystem, error) {
+func NewSlackInterface(logger *zap.Logger, setupData string) (EventedChatSystem, error) {
 	var oauthData slack.OAuthResponse
 	if err := json.Unmarshal([]byte(setupData), &oauthData); err != nil {
 		return nil, err
@@ -82,16 +88,9 @@ func NewSlackInterface(ctx context.Context, logger *zap.Logger, setupData string
 		slackOptions = append(slackOptions, slack.OptionDebug(true))
 	}
 	slackAPI := slack.New(oauthData.Bot.BotAccessToken, slackOptions...)
-	slackRTM := slackAPI.NewRTM()
 
-	go slackRTM.ManageConnection()
-	go func() {
-		<-ctx.Done()
-		_ = slackRTM.Disconnect()
-	}()
 	s := &slackInterface{
 		api:        slackAPI,
-		rtm:        slackRTM,
 		oauthData:  oauthData,
 		rootLogger: logger,
 		logger:     logger,
@@ -111,89 +110,31 @@ func (s *slackInterface) UnmarshalMessageHandle(handleJSON string) (messages.Mes
 	return &mh, nil
 }
 
-func (s *slackInterface) HandleEvents(ctx context.Context) error {
-	for {
-		select {
-		case slackEvent := <-s.rtm.IncomingEvents:
-			err := s.handleEvent(ctx, slackEvent)
-			if err != nil {
-				s.logger.Error("failure while handling event", zap.String("event-type", slackEvent.Type), zap.Error(err))
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
+// StopTeam is returned by HandleEvent when the app has been uninstalled from that team.
+var StopTeam = errors.New("stop this team")
 
-func (s *slackInterface) handleEvent(ctx context.Context, event slack.RTMEvent) (err error) {
-	s.logger.Debug("received slack event", zap.String("event-type", event.Type))
+func (s *slackInterface) HandleEvent(ctx context.Context, event ChatEvent) (err error) {
+	s.logger.Debug("received slack event", zap.String("event-type", event.slackEvent.Type))
 
-	switch event.Type {
-	case "hello":
-		return s.handleHello(ctx, event.Data.(*slack.HelloEvent))
-	case "connecting":
-		return s.handleConnecting(ctx, event.Data.(*slack.ConnectingEvent))
-	case "connected":
-		return s.handleConnected(ctx, event.Data.(*slack.ConnectedEvent))
-	case "message":
-		return s.handleMessage(ctx, event.Data.(*slack.MessageEvent))
-	case "incoming_error":
-		return s.handleIncomingError(ctx, event.Data.(*slack.IncomingEventError))
-	case "latency_report":
-		return s.handleLatencyReport(ctx, event.Data.(*slack.LatencyReport))
-	case "disconnected":
-		return s.handleDisconnected(ctx, event.Data.(*slack.DisconnectedEvent))
-	case "connection_error":
-		return s.handleConnectionError(ctx, event.Data.(*slack.ConnectionErrorEvent))
-	// this type doesn't come from Slack; just from our slack lib when it has a problem
-	// understanding the JSON. we have to do this in order to get a useful error message.
-	case "unmarshalling_error":
-		return s.handleUnmarshallingError(ctx, event.Data.(*slack.UnmarshallingErrorEvent))
-
-	case "user_typing":
-	case "desktop_notification":
-
+	switch ev := event.slackEvent.Data.(type) {
+	case *slackevents.MessageEvent:
+		return s.handleMessage(ctx, ev)
+	case *slackevents.AppUninstalledEvent:
+		return StopTeam
 	default:
-		s.logger.Debug("event type not recognized", zap.String("event-type", event.Type))
+		s.logger.Debug("event type not recognized", zap.String("event-type", event.slackEvent.Type))
 	}
 
 	return nil
 }
 
-func (s *slackInterface) handleHello(ctx context.Context, _ *slack.HelloEvent) error {
-	s.logger.Info("got hello from slack")
-	return nil
-}
-
-func (s *slackInterface) handleConnecting(ctx context.Context, eventData *slack.ConnectingEvent) error {
-	s.logger.Info("connecting", zap.Int("attempt", eventData.Attempt), zap.Int("connection-count", eventData.ConnectionCount))
-	return nil
-}
-
-func (s *slackInterface) handleConnectionError(ctx context.Context, eventData *slack.ConnectionErrorEvent) error {
-	s.logger.Info("connection error", zap.Int("attempt", eventData.Attempt), zap.Duration("connection-count", eventData.Backoff), zap.Error(eventData.ErrorObj))
-	return nil
-}
-
-func (s *slackInterface) handleConnected(ctx context.Context, eventData *slack.ConnectedEvent) error {
-	s.team = *eventData.Info.Team
-	s.bot = *eventData.Info.User
-	s.logger = s.rootLogger.With(zap.String("team", s.team.ID))
-
-	s.logger.Info("connected to slack",
-		zap.Int("connection-count", eventData.ConnectionCount),
-		zap.String("team-name", s.team.Name),
-		zap.String("team-domain", s.team.Domain),
-		zap.String("bot-name", s.bot.Name),
-		zap.String("bot-id", s.bot.ID))
-	return nil
-}
-
-func (s *slackInterface) handleMessage(ctx context.Context, eventData *slack.MessageEvent) error {
-	if eventData.Msg.SubType == "bot_message" {
+func (s *slackInterface) handleMessage(ctx context.Context, eventData *slackevents.MessageEvent) error {
+	if eventData.SubType == "bot_message" {
 		// ignore messages from bots, including echoes of messages from this bot itself
 		return nil
 	}
+	// TODO: handle messages in threads, with SubType="message_replied"; replies should go in thread
+
 	s.logger.Debug("received message", zap.Any("message", *eventData))
 
 	if s.incomingMessageCallback != nil {
@@ -208,37 +149,20 @@ func (s *slackInterface) handleMessage(ctx context.Context, eventData *slack.Mes
 	return nil
 }
 
-func (s *slackInterface) handleIncomingError(ctx context.Context, eventData *slack.IncomingEventError) error {
-	s.logger.Info("incoming error reported by slack", zap.String("error", eventData.Error()))
-	return nil
-}
-
-func (s *slackInterface) handleLatencyReport(ctx context.Context, eventData *slack.LatencyReport) error {
-	// TODO: monkit stat eventData.Value ?
-	return nil
-}
-
-func (s *slackInterface) handleDisconnected(ctx context.Context, eventData *slack.DisconnectedEvent) error {
-	s.logger.Info("disconnected from slack", zap.Bool("intentional", eventData.Intentional), zap.String("cause", eventData.Cause.Error()))
-	return nil
-}
-
-func (s *slackInterface) handleUnmarshallingError(ctx context.Context, eventData *slack.UnmarshallingErrorEvent) error {
-	s.logger.Error("failed to unmarshal event from slack", zap.Error(eventData))
-	return nil
-}
-
-func (s *slackInterface) GetInstallingUser(ctx context.Context) (string, error) {
+func (s *slackInterface) GetInstallingUser(_ context.Context) (string, error) {
 	return s.oauthData.UserID, nil
 }
 
 func (s *slackInterface) SendNotification(ctx context.Context, id, message string) (messages.MessageHandle, error) {
 	// TODO: can the IM channel be cached? is it expected to remain valid as long as the userid?
-	_, _, chanID, err := s.rtm.OpenIMChannelContext(ctx, id)
+	params := &slack.OpenConversationParameters{
+		Users: []string{id},
+	}
+	chanID, _, _, err := s.api.OpenConversationContext(ctx, params)
 	if err != nil {
 		return nil, err
 	}
-	return s.PostMessage(ctx, chanID, message)
+	return s.PostMessage(ctx, chanID.ID, message)
 }
 
 func (s *slackInterface) SendPersonalReport(ctx context.Context, chatID, title string, items []string) (messages.MessageHandle, error) {
@@ -315,9 +239,6 @@ func (s *slackInterface) GetUserInfoByID(ctx context.Context, chatID string) (me
 }
 
 func (s *slackInterface) GetUserPresence(ctx context.Context, chatID string) (*slack.UserPresence, error) {
-	// TODO: can this use rtm.GetUserPresenceContext instead? Docs suggest that that one is
-	// rate-limited, and there isn't any mention of rate limiting on this web-API version,
-	// so maybe this is the easiest way to avoid any headaches.
 	return s.api.GetUserPresenceContext(ctx, chatID)
 }
 
@@ -327,8 +248,8 @@ func (s *slackInterface) InformBuildStarted(ctx context.Context, mh messages.Mes
 		return errs.New("given message handle is a %T, not a *messageHandle", mh)
 	}
 	// ignore errors here; usually these won't be present
-	_ = s.rtm.RemoveReactionContext(ctx, "white_check_mark", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
-	_ = s.rtm.RemoveReactionContext(ctx, "x", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+	_ = s.api.RemoveReactionContext(ctx, "white_check_mark", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+	_ = s.api.RemoveReactionContext(ctx, "x", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
 	return nil
 }
 
@@ -337,7 +258,7 @@ func (s *slackInterface) InformBuildSuccess(ctx context.Context, mh messages.Mes
 	if !ok {
 		return errs.New("given message handle is a %T, not a *messageHandle", mh)
 	}
-	return s.rtm.AddReactionContext(ctx, "white_check_mark", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+	return s.api.AddReactionContext(ctx, "white_check_mark", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
 }
 
 func (s *slackInterface) InformBuildFailure(ctx context.Context, mh messages.MessageHandle, link string) error {
@@ -345,8 +266,8 @@ func (s *slackInterface) InformBuildFailure(ctx context.Context, mh messages.Mes
 	if !ok {
 		return errs.New("given message handle is a %T, not a *messageHandle", mh)
 	}
-	_, _, err := s.rtm.PostMessageContext(ctx, mhObj.Channel, slack.MsgOptionText("Build failure: "+link, false), slack.MsgOptionTS(mhObj.Timestamp))
-	reactionErr := s.rtm.AddReactionContext(ctx, "x", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+	_, _, err := s.api.PostMessageContext(ctx, mhObj.Channel, slack.MsgOptionText("Build failure: "+link, false), slack.MsgOptionTS(mhObj.Timestamp))
+	reactionErr := s.api.AddReactionContext(ctx, "x", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
 	return errs.Combine(err, reactionErr)
 }
 
@@ -355,7 +276,7 @@ func (s *slackInterface) InformBuildAborted(ctx context.Context, mh messages.Mes
 	if !ok {
 		return errs.New("given message handle is a %T, not a *messageHandle", mh)
 	}
-	return s.rtm.AddReactionContext(ctx, "no_entry_sign", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
+	return s.api.AddReactionContext(ctx, "no_entry_sign", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
 }
 
 func GetOAuthToken(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *slack.OAuthResponse, err error) {
@@ -541,4 +462,26 @@ func AssembleSlackAuthURL(redirectURL string) string {
 	values.Set("user_scope", strings.Join(userScopes, ","))
 	values.Set("redirect_uri", redirectURL)
 	return slackAuthURL + "?" + values.Encode()
+}
+
+func VerifyEventMessage(header http.Header, messageBody []byte) (ev ChatEvent, teamID string, err error) {
+	sv, err := slack.NewSecretsVerifier(header, *SigningSecret)
+	if err != nil {
+		return ev, "", &BadEvent{err.Error()}
+	}
+	if _, err = sv.Write(messageBody); err != nil {
+		return ev, "", err
+	}
+	if err := sv.Ensure(); err != nil {
+		return ev, "", VerifyError
+	}
+	apiEvent, err := slackevents.ParseEvent(json.RawMessage(messageBody), slackevents.OptionNoVerifyToken())
+	if err != nil {
+		return ev, "", err
+	}
+	if apiEvent.Type == slackevents.CallbackEvent {
+		return
+	}
+	ev.slackEvent = &apiEvent
+	return ev, apiEvent.TeamID, nil
 }
