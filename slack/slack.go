@@ -32,15 +32,40 @@ var (
 const (
 	AddToSlackButton = `<a href="%s"><img alt="Add to Slack" height="40" width="139" src="https://platform.slack-edge.com/img/add_to_slack.png" srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" /></a>`
 
-	slackAuthURL = "https://slack.com/oauth/authorize"
+	slackAuthURL = "https://slack.com/oauth/v2/authorize"
 )
 
 var appScopes = []string{
-	"bot", // to work as a bot
+	"app_mentions:read",
+	"chat:write",
+	"dnd:read",
+	"im:history",
+	"im:read",
+	"im:write",
+	"links:read",
+	"mpim.history",
+	"reactions.write",
+	"team:read",
+	"users.read",
+	"users.read.email",
 }
 
 var userScopes = []string{
-	"identity.basic", // see basic info about the installing user
+	"channels:history",
+	"channels:read",
+	"groups:history",
+	"groups:read",
+	"im:history",
+	"im:read",
+	"im:write",
+	"links:read",
+	"links:write",
+	"mpim:history",
+	"mpim:read",
+	"reactions:write",
+	"team:read",
+	"users:read",
+	"users:read.email",
 }
 
 type slackInterface struct {
@@ -279,24 +304,8 @@ func (s *slackInterface) InformBuildAborted(ctx context.Context, mh messages.Mes
 	return s.api.AddReactionContext(ctx, "no_entry_sign", slack.NewRefToMessage(mhObj.Channel, mhObj.Timestamp))
 }
 
-func GetOAuthToken(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *slack.OAuthResponse, err error) {
-	return slack.GetOAuthResponseContext(ctx, http.DefaultClient, clientID, clientSecret, code, redirectURI)
-}
-
-// GetOAuthV2Token is based on slack.GetOAuthResponseContext(), but uses oauth.v2.access (and
-// hence a slightly different response type).
-func GetOAuthV2Token(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *OAuthV2Response, err error) {
-	values := url.Values{
-		"client_id":     {clientID},
-		"client_secret": {clientSecret},
-		"code":          {code},
-		"redirect_uri":  {redirectURI},
-	}
-	response := &OAuthV2Response{}
-	if err := postForm(ctx, slack.APIURL+"oauth.v2.access", values, response); err != nil {
-		return nil, err
-	}
-	return response, response.Err()
+func GetOAuthV2Token(ctx context.Context, clientID, clientSecret, code, redirectURI string) (resp *slack.OAuthV2Response, err error) {
+	return slack.GetOAuthV2ResponseContext(ctx, http.DefaultClient, clientID, clientSecret, code, redirectURI)
 }
 
 // postForm is very similar to slack.postForm(); reimplemented for the sake of getOAuthToken().
@@ -460,7 +469,6 @@ func AssembleSlackAuthURL(redirectURL string) string {
 	values.Set("client_id", *ClientID)
 	values.Set("scope", strings.Join(appScopes, ","))
 	values.Set("user_scope", strings.Join(userScopes, ","))
-	values.Set("redirect_uri", redirectURL)
 	return slackAuthURL + "?" + values.Encode()
 }
 

@@ -87,7 +87,7 @@ func (ws *uiWebState) maybeOAuthRedirect(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusNotFound)
 	}
 	w.WriteHeader(http.StatusOK)
-	resp, err := slack.GetOAuthToken(r.Context(), *slack.ClientID, *slack.ClientSecret, code, ws.slackRedirectURL())
+	resp, err := slack.GetOAuthV2Token(r.Context(), *slack.ClientID, *slack.ClientSecret, code, ws.slackRedirectURL())
 	if err != nil {
 		ws.logger.Error("Failed to acquire OAuth token from Slack", zap.Error(err))
 		_, _ = w.Write([]byte(fmt.Sprintf("Failed to acquire OAuth token from Slack: %v", err)))
@@ -100,13 +100,13 @@ func (ws *uiWebState) maybeOAuthRedirect(w http.ResponseWriter, r *http.Request)
 		_, _ = w.Write([]byte("Failed to record OAuth token data."))
 		return
 	}
-	if err := ws.governor.NewTeam(resp.TeamID, string(jsonBlob)); err != nil {
+	if err := ws.governor.NewTeam(resp.Team.ID, string(jsonBlob)); err != nil {
 		ws.logger.Error("failed to create new team record", zap.Error(err))
 		_, _ = w.Write([]byte("Failed to record new team."))
 		return
 	}
 
-	_, _ = w.Write([]byte(fmt.Sprintf("Success! Changeset Chihuahua is installed to your %s workspace.\n", resp.TeamName)))
+	_, _ = w.Write([]byte(fmt.Sprintf("Success! Changeset Chihuahua is installed to your %s workspace.\n", resp.Team.Name)))
 }
 
 func (ws *uiWebState) gerritEvent(w http.ResponseWriter, r *http.Request) {
