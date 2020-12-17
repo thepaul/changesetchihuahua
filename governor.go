@@ -28,7 +28,6 @@ type Governor struct {
 	logger     *zap.Logger
 
 	teamsLock sync.Mutex
-	teamData  map[string]string
 	teams     map[string]*Team
 
 	teamFileLock sync.Mutex
@@ -62,13 +61,12 @@ func NewGovernor(ctx context.Context, logger *zap.Logger, teamFile string) (*Gov
 	g := &Governor{
 		topContext: ctx,
 		logger:     logger,
-		teamData:   teamData,
 		teams:      make(map[string]*Team),
 		teamFile:   teamFile,
 	}
-	logger.Info("changeset-chihuahua governor starting up", zap.String("version", Version), zap.Int("num-teams", len(g.teamData)))
+	logger.Info("changeset-chihuahua governor starting up", zap.String("version", Version), zap.Int("num-teams", len(teamData)))
 
-	for teamID, setupData := range g.teamData {
+	for teamID, setupData := range teamData {
 		if err := g.StartTeam(teamID, setupData); err != nil {
 			logger.Error("failed to start team", zap.String("team-id", teamID), zap.Error(err))
 		}
