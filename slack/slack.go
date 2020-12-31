@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nlopes/slack"
-	"github.com/nlopes/slack/slackutilsx"
+	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackutilsx"
 	"github.com/zeebo/errs"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -58,7 +58,7 @@ type logWrapper struct {
 	*zap.Logger
 }
 
-// log all github.com/nlopes/slack messages at Debug level
+// log all github.com/slack-go/slack messages at Debug level
 func (lw logWrapper) Output(callDepth int, s string) error {
 	lw.WithOptions(zap.AddCallerSkip(callDepth)).Debug(s)
 	return nil

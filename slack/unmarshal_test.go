@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/nlopes/slack"
+	"github.com/slack-go/slack"
 )
 
-// v0.6.0 of nlopes/slack can't unmarshal message events if they have 'rich_text' blocks
+// v0.6.0 of nlopes/slack couldn't unmarshal message events if they have 'rich_text' blocks
 // in them, as this test string does. it's important because apparently all messages have
-// them now! maybe this only happens for newer apps? unclear.
+// them now! maybe this only happens for newer apps? unclear. Make sure we can unmarshal
+// them.
 func TestSlackLibCanUnmarshalBlocksWithRichText(t *testing.T) {
 	const eventJSON = "{\"blocks\":[{\"type\":\"rich_text\",\"block_id\":\"5g6vY\",\"elements\":[{\"type\":\"rich_text_section\",\"elements\":[{\"type\":\"text\",\"text\":\"jfdjfkdl\"}]}]}]}"
 
