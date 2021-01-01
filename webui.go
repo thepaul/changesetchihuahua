@@ -64,7 +64,7 @@ func (ws *uiWebState) HandleChatEvent(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	err = ws.governor.VerifyAndHandleChatEvent(r.Header, body)
+	responseBytes, err := ws.governor.VerifyAndHandleChatEvent(r.Header, body)
 	if err != nil {
 		logger := ws.logger.With(zap.Error(err), zap.Any("headers", r.Header), zap.ByteString("event-body", body))
 		if _, ok := err.(*slack.BadEvent); ok {
@@ -76,6 +76,16 @@ func (ws *uiWebState) HandleChatEvent(w http.ResponseWriter, r *http.Request) {
 		} else {
 			logger.Error("Failed to handle chat event")
 			w.WriteHeader(http.StatusInternalServerError)
+		}
+		return
+	}
+	if responseBytes != nil {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Length", strconv.Itoa(len(responseBytes)))
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseBytes)
+		if err != nil {
+			ws.logger.Debug("failed to write response to ResponseWriter", zap.Error(err))
 		}
 	}
 }

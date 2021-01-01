@@ -146,6 +146,14 @@ func (s *slackInterface) HandleEvent(ctx context.Context, event ChatEvent) (err 
 	return nil
 }
 
+func HandleNoTeamEvent(ctx context.Context, event ChatEvent) (responseBytes []byte) {
+	switch ev := event.slackEvent.Data.(type) {
+	case *slackevents.EventsAPIURLVerificationEvent:
+		return []byte(ev.Challenge)
+	}
+	return nil
+}
+
 func (s *slackInterface) handleMessage(ctx context.Context, eventData *slackevents.MessageEvent) error {
 	if eventData.SubType == "bot_message" {
 		// ignore messages from bots, including echoes of messages from this bot itself

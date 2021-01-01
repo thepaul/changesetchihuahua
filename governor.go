@@ -202,21 +202,22 @@ func (g *Governor) GerritEventReceived(teamID string, event events.GerritEvent) 
 	}()
 }
 
-func (g *Governor) VerifyAndHandleChatEvent(header http.Header, messageBody []byte) error {
+func (g *Governor) VerifyAndHandleChatEvent(header http.Header, messageBody []byte) (responseBytes []byte, err error) {
 	event, teamID, err := slack.VerifyEventMessage(header, messageBody)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	g.teamsLock.Lock()
 	team, ok := g.teams[teamID]
 	g.teamsLock.Unlock()
 	if !ok {
 		g.logger.Info("received chat event for unknown team", zap.String("team-id", teamID), zap.Any("event", event))
-		return nil
+		responseBytes = slack.HandleNoTeamEvent(g.topContext, event)
+		return responseBytes, nil
 	}
 
 	go team.teamApp.ChatEvent(g.topContext, event)
-	return nil
+	return nil, nil
 }
 
 func (g *Governor) appendTeamDefinition(teamID, setupData string) (err error) {
