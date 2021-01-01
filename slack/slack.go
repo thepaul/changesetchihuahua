@@ -36,37 +36,30 @@ const (
 )
 
 var appScopes = []string{
-	"app_mentions:read",
 	"chat:write",
 	"dnd:read",
 	"im:history",
 	"im:read",
 	"im:write",
 	"links:read",
-	"mpim.history",
-	"reactions.write",
-	"team:read",
-	"users.read",
-	"users.read.email",
-}
-
-var userScopes = []string{
-	"channels:history",
-	"channels:read",
-	"groups:history",
-	"groups:read",
-	"im:history",
-	"im:read",
-	"im:write",
-	"links:read",
-	"links:write",
 	"mpim:history",
-	"mpim:read",
 	"reactions:write",
 	"team:read",
 	"users:read",
 	"users:read.email",
 }
+
+var userScopes = []string{}
+
+type BadEvent struct {
+	problem string
+}
+
+func (e *BadEvent) Error() string {
+	return e.problem
+}
+
+var VerifyError = errors.New("verify error")
 
 type slackInterface struct {
 	api *slack.Client
