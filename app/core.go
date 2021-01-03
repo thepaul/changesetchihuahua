@@ -227,7 +227,7 @@ func (a *App) GerritEvent(ctx context.Context, event events.GerritEvent) {
 	}
 }
 
-func (a *App) ChatEvent(ctx context.Context, eventObj slack.ChatEvent) {
+func (a *App) ChatEvent(ctx context.Context, eventObj slack.ChatEvent) error {
 	err := a.chat.HandleEvent(ctx, eventObj)
 	if err != nil {
 		if err == slack.StopTeam {
@@ -236,10 +236,11 @@ func (a *App) ChatEvent(ctx context.Context, eventObj slack.ChatEvent) {
 			if err != nil {
 				a.logger.Error("failed to shut down app for team")
 			}
-			return
+			return slack.StopTeam
 		}
 		a.logger.Error("failed to handle event from chat system", zap.Error(err))
 	}
+	return nil
 }
 
 // IncomingChatCommand gets called by the ChatSystem when the bot sees a chat message. This might

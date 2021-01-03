@@ -216,7 +216,19 @@ func (g *Governor) VerifyAndHandleChatEvent(header http.Header, messageBody []by
 		return responseBytes, nil
 	}
 
-	go team.teamApp.ChatEvent(g.topContext, event)
+	go func() {
+		err := team.teamApp.ChatEvent(g.topContext, event)
+		if err == slack.StopTeam {
+			g.logger.Info("uninstalled from team", zap.String("team-id", teamID))
+			g.teamsLock.Lock()
+			delete(g.teams, teamID)
+			g.teamsLock.Unlock()
+
+			if err := team.teamApp.Close(); err != nil {
+				g.logger.Info("failed to close team", zap.String("team-id", teamID), zap.Error(err))
+			}
+		}
+	}()
 	return nil, nil
 }
 
