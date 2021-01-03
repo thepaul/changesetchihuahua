@@ -95,6 +95,7 @@ func (ws *uiWebState) maybeOAuthRedirect(w http.ResponseWriter, r *http.Request)
 	code := values.Get("code")
 	if code == "" {
 		w.WriteHeader(http.StatusNotFound)
+		return
 	}
 	w.WriteHeader(http.StatusOK)
 	resp, err := slack.GetOAuthV2Token(r.Context(), *slack.ClientID, *slack.ClientSecret, code, ws.slackRedirectURL())

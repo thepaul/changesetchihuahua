@@ -69,7 +69,7 @@ type slackInterface struct {
 
 	bot       slack.UserDetails
 	team      slack.Team
-	oauthData slack.OAuthResponse
+	oauthData slack.OAuthV2Response
 
 	incomingMessageCallback func(userID, chanID string, isDM bool, text string) string
 }
@@ -95,7 +95,7 @@ type EventedChatSystem interface {
 }
 
 func NewSlackInterface(logger *zap.Logger, setupData string) (EventedChatSystem, error) {
-	var oauthData slack.OAuthResponse
+	var oauthData slack.OAuthV2Response
 	if err := json.Unmarshal([]byte(setupData), &oauthData); err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func NewSlackInterface(logger *zap.Logger, setupData string) (EventedChatSystem,
 	if *debugSlackLib {
 		slackOptions = append(slackOptions, slack.OptionDebug(true))
 	}
-	slackAPI := slack.New(oauthData.Bot.BotAccessToken, slackOptions...)
+	slackAPI := slack.New(oauthData.AccessToken, slackOptions...)
 
 	s := &slackInterface{
 		api:        slackAPI,
@@ -133,20 +133,27 @@ var StopTeam = errors.New("stop this team")
 
 func (s *slackInterface) HandleEvent(ctx context.Context, event ChatEvent) (err error) {
 	s.logger.Debug("received slack event", zap.String("event-type", event.slackEvent.Type))
-
-	switch ev := event.slackEvent.Data.(type) {
-	case *slackevents.MessageEvent:
-		return s.handleMessage(ctx, ev)
-	case *slackevents.AppUninstalledEvent:
-		return StopTeam
+	switch event.slackEvent.Type {
+	case slackevents.CallbackEvent:
+		innerEvent := event.slackEvent.InnerEvent
+		switch ev := innerEvent.Data.(type) {
+		case *slackevents.MessageEvent:
+			return s.handleMessage(ctx, ev)
+		case *slackevents.AppUninstalledEvent:
+			return StopTeam
+		default:
+			s.logger.Debug("inner event type not recognized", zap.String("event-datatype", fmt.Sprintf("%T", innerEvent.Data)))
+		}
 	default:
-		s.logger.Debug("event type not recognized", zap.String("event-type", event.slackEvent.Type))
+		s.logger.Debug("outer event type not recognized", zap.String("event-type", event.slackEvent.Type))
 	}
-
 	return nil
 }
 
 func HandleNoTeamEvent(ctx context.Context, event ChatEvent) (responseBytes []byte) {
+	if event.slackEvent == nil {
+		return nil
+	}
 	switch ev := event.slackEvent.Data.(type) {
 	case *slackevents.EventsAPIURLVerificationEvent:
 		return []byte(ev.Challenge)
@@ -176,7 +183,7 @@ func (s *slackInterface) handleMessage(ctx context.Context, eventData *slackeven
 }
 
 func (s *slackInterface) GetInstallingUser(_ context.Context) (string, error) {
-	return s.oauthData.UserID, nil
+	return s.oauthData.AuthedUser.ID, nil
 }
 
 func (s *slackInterface) SendNotification(ctx context.Context, id, message string) (messages.MessageHandle, error) {
@@ -470,6 +477,7 @@ func AssembleSlackAuthURL(redirectURL string) string {
 	values.Set("client_id", *ClientID)
 	values.Set("scope", strings.Join(appScopes, ","))
 	values.Set("user_scope", strings.Join(userScopes, ","))
+	values.Set("redirect_uri", redirectURL)
 	return slackAuthURL + "?" + values.Encode()
 }
 
@@ -487,9 +495,6 @@ func VerifyEventMessage(header http.Header, messageBody []byte) (ev ChatEvent, t
 	apiEvent, err := slackevents.ParseEvent(json.RawMessage(messageBody), slackevents.OptionNoVerifyToken())
 	if err != nil {
 		return ev, "", err
-	}
-	if apiEvent.Type == slackevents.CallbackEvent {
-		return
 	}
 	ev.slackEvent = &apiEvent
 	return ev, apiEvent.TeamID, nil
