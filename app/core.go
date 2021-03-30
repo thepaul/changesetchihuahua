@@ -30,7 +30,9 @@ const (
 	// global-report-channel
 	defaultGlobalReportHour = 15
 	// Gerrit query to use for determining change sets with work needed for the global report
-	defaultWorkNeededQuery = "is:open -is:wip -label:Code-Review=-2"
+	defaultWorkNeededQuery = "is:open -is:wip -label:Code-Review=-2 -label:Verified=-1"
+	// Gerrit query to use for determining change sets with reviews needed for a particular user
+	defaultPerUserReviewsNeededQuery = "reviewer:\"$username\" is:open -reviewedby:\"$username\" -owner:\"$username\" -is:wip -label:Verified=-1"
 )
 
 var (
@@ -79,6 +81,7 @@ var configItems = []configItem{
 	{Name: "global-report-hour", Description: "Hour (in 24-hour time) in UTC when the daily report will be sent to global-report-channel", ItemType: ConfigItemInt},
 	{Name: "personal-report-hour", Description: "Hour (in 24-hour time) in each user's local timezone when the daily review report should be sent, if they are online. If they are not online, the system will keep checking every hour during working hours.", ItemType: ConfigItemInt},
 	{Name: "work-needed-query", Description: "Gerrit query to use for determining change sets with work needed for the global report", ItemType: ConfigItemString},
+	{Name: "personal-reviews-needed-query", Description: "Gerrit query to use for determining change sets with reviews needed for a particular user", ItemType: ConfigItemString},
 	{Name: "jenkins-robot-user", Description: "Gerrit robot user that will post updates from Jenkins. If provided, these will be parsed and changed to display in a more helpful way", ItemType: ConfigItemString},
 	{Name: "jenkins-link-transformer", Description: "String transformation to apply to Jenkins links before passing them on. Looks like a sed subst command, but with $1 backreferences instead of \"\\1\"", ItemType: ConfigItemString},
 }
@@ -1340,19 +1343,34 @@ changeLoop:
 		// note all users that have voted on this patchset
 		usersWithVotes := map[string]struct{}{}
 		didntVoteMax := map[string]struct{}{}
+		rejected := map[string]struct{}{}
+
 		for _, labelInfo := range change.Labels {
 			if labelInfo.Optional {
 				// voting on an optional label doesn't relieve you of duty
 				continue
 			}
 			for _, vote := range labelInfo.All {
-				if vote.Value != nil && *vote.Value > 0 {
-					usersWithVotes[vote.Username] = struct{}{}
-					if *vote.Value < vote.PermittedVotingRange.Max {
-						didntVoteMax[vote.Username] = struct{}{}
+				if vote.Value != nil {
+					if *vote.Value > 0 {
+						usersWithVotes[vote.Username] = struct{}{}
+						if *vote.Value < vote.PermittedVotingRange.Max {
+							didntVoteMax[vote.Username] = struct{}{}
+						}
+					} else if *vote.Value < 0 {
+						usersWithVotes[vote.Username] = struct{}{}
+						if *vote.Value == vote.PermittedVotingRange.Min {
+							rejected[vote.Username] = struct{}{}
+						}
 					}
 				}
 			}
+		}
+
+		// if a change has been rejected (someone voted minimum score on a
+		// non-optional tag), no further review work needed
+		if len(rejected) > 0 {
+			continue
 		}
 
 		// note all users that have commented on this patchset
@@ -1549,7 +1567,8 @@ func (a *App) PersonalReportToUser(ctx context.Context, logger *zap.Logger, now,
 	}
 
 	// actually get their reviews according to Gerrit
-	changes, err := a.allPendingReviewsFor(ctx, acct.Username)
+	personalWorkNeededQuery := a.persistentDB.JustGetConfig(ctx, "personal-reviews-needed-query", defaultPerUserReviewsNeededQuery)
+	changes, err := a.allPendingReviewsFor(ctx, acct.Username, personalWorkNeededQuery)
 	if err != nil {
 		logger.Error("failed to query Gerrit for pending reviews", zap.Error(err))
 		return
@@ -1699,9 +1718,10 @@ func (a *App) isGoodTimeForReport(ctx context.Context, _ *gerrit.AccountInfo, _ 
 	return hour >= personalReportHour
 }
 
-func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername string) ([]gerrit.ChangeInfo, error) {
-	queryString := fmt.Sprintf("reviewer:\"%[1]s\" is:open -reviewedby:\"%[1]s\" -owner:\"%[1]s\" -is:wip",
-		gerritUsername)
+var usernameVarRegex = regexp.MustCompile(`\$(username\b|\{username})`)
+
+func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername, query string) ([]gerrit.ChangeInfo, error) {
+	queryString := usernameVarRegex.ReplaceAllString(query, gerritUsername)
 	return a.getAllChangesMatching(ctx, queryString, &gerrit.QueryChangesOpts{
 		Limit:                    gerritQueryPageSize,
 		DescribeCurrentRevision:  true,
