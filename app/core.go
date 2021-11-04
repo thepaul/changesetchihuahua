@@ -1338,6 +1338,8 @@ func (a *App) GlobalReport(ctx context.Context, t time.Time, chanID string) {
 	sort.Sort(byLastUpdateTime(changes))
 
 	var lines []string
+	var countOverWeek int
+	var countOverMonth int
 changeLoop:
 	for _, change := range changes {
 		// note all users that have voted on this patchset
@@ -1451,6 +1453,14 @@ changeLoop:
 			age = prettyTimeDelta(sinceCreated) + " old"
 		}
 
+		switch {
+		case sinceCreated > 24*time.Hour*30:
+			countOverMonth++
+		case sinceCreated > 24*time.Hour*7:
+			countOverWeek++
+		default:
+		}
+
 		lines = append(lines, fmt.Sprintf("%s %s\n%s · %s · %s",
 			a.formatChangeInfoLink(&change),
 			ownerName,
@@ -1463,7 +1473,8 @@ changeLoop:
 	}
 
 	logger.Debug("global report complete", zap.Int("num-lines", len(lines)))
-	if _, err := a.chat.SendChannelReport(ctx, chanID, "Waiting for review", lines); err != nil {
+	caption := fmt.Sprintf("%d changesets waiting for review (%d waiting for over a week, %d waiting for over a month)", len(lines), countOverWeek, countOverMonth)
+	if _, err := a.chat.SendChannelReport(ctx, chanID, caption, lines); err != nil {
 		logger.Error("failed to send global message report", zap.Error(err))
 	}
 }
