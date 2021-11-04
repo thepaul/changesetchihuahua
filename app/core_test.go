@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -148,14 +146,8 @@ func testWithMockChat(t *testing.T, config map[string]string, testFunc func(*tes
 	defer ctrl.Finish()
 
 	logger := zaptest.NewLogger(t)
-	tempDir, err := ioutil.TempDir("", "changesetchihuahua_test.")
-	require.NoError(t, err)
-	defer func() {
-		err := os.RemoveAll(tempDir)
-		require.NoError(t, err)
-	}()
 
-	db, err := app.NewPersistentDB(logger.Named("db"), "sqlite3:"+filepath.Join(tempDir, "sqlite.db"))
+	db, err := app.NewPersistentDB(logger.Named("db"), "sqlite3:"+filepath.Join(t.TempDir(), "sqlite.db"))
 	require.NoError(t, err)
 
 	for key, value := range config {
@@ -698,7 +690,7 @@ func TestReviewerAdded(t *testing.T) {
 		ts.MockGerrit.EXPECT().
 			GetChangeEx(gomock.Any(), "jorts/testiness~1", &gerrit.QueryChangesOpts{
 				DescribeDetailedAccounts: true,
-				DescribeReviewerUpdates: true,
+				DescribeReviewerUpdates:  true,
 			}).
 			Times(1).
 			Return(gerrit.ChangeInfo{
@@ -714,13 +706,13 @@ func TestReviewerAdded(t *testing.T) {
 				Owner:    *userA.GerritAccount(),
 				ReviewerUpdates: []gerrit.ReviewerUpdateInfo{
 					{
-						Updated:   eventTime.Add(-60*time.Second).Format(gerrit.TimeLayout),
+						Updated:   eventTime.Add(-60 * time.Second).Format(gerrit.TimeLayout),
 						UpdatedBy: *userC.GerritAccount(),
 						Reviewer:  userB.GerritAccount(),
 						State:     "REVIEWER",
 					},
 					{
-						Updated:   eventTime.Add(-30*time.Second).Format(gerrit.TimeLayout),
+						Updated:   eventTime.Add(-30 * time.Second).Format(gerrit.TimeLayout),
 						UpdatedBy: *userC.GerritAccount(),
 						Reviewer:  userB.GerritAccount(),
 						State:     "REMOVED",
