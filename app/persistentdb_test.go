@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"database/sql"
-	"io/ioutil"
-	"os"
 	"path"
 	"testing"
 
@@ -13,18 +11,11 @@ import (
 )
 
 func doPersistentDBTest(t *testing.T, f func(ctx context.Context, d *PersistentDB)) {
-	tmpDir, err := ioutil.TempDir("", "changeset-chihuahua-test")
-	require.NoError(t, err)
-	defer func() {
-		if err := os.RemoveAll(tmpDir); err != nil {
-			t.Errorf("failed to clean up tmpdir: %v", err)
-		}
-	}()
-
-	dbFile := path.Join(tmpDir, "persistent.db")
+	dbFile := path.Join(t.TempDir(), "persistent.db")
 	db, err := NewPersistentDB(zaptest.NewLogger(t), "sqlite:"+dbFile)
 	require.NoError(t, err)
 	require.NotNil(t, db)
+	defer func(){ require.NoError(t, db.Close()) }()
 
 	f(context.Background(), db)
 }

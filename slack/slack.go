@@ -207,11 +207,25 @@ func (s *slackInterface) SendChannelNotification(ctx context.Context, chanID, me
 }
 
 func (s *slackInterface) SendChannelReport(ctx context.Context, chatID, title string, items []string) (messages.MessageHandle, error) {
-	return s.PostMessage(ctx, chatID, fmt.Sprintf("*%s*\n\n%s", title, strings.Join(items, "\n\n")))
+	titleHandle, err := s.PostMessage(ctx, chatID, fmt.Sprintf("*%s*", title))
+	if err != nil {
+		return titleHandle, errs.Wrap(err)
+	}
+	mh := titleHandle.(*messageHandle)
+	_, err = s.PostMessageThread(ctx, chatID, mh.Timestamp, strings.Join(items, "\n\n"))
+	return titleHandle, errs.Wrap(err)
 }
 
 func (s *slackInterface) PostMessage(ctx context.Context, chanID, message string) (messages.MessageHandle, error) {
 	ch, tm, err := s.api.PostMessageContext(ctx, chanID, slack.MsgOptionText(message, false))
+	if err != nil {
+		return nil, err
+	}
+	return &messageHandle{Channel: ch, Timestamp: tm}, nil
+}
+
+func (s *slackInterface) PostMessageThread(ctx context.Context, chanID, threadTS, message string) (messages.MessageHandle, error) {
+	ch, tm, err := s.api.PostMessageContext(ctx, chanID, slack.MsgOptionTS(threadTS), slack.MsgOptionText(message, false))
 	if err != nil {
 		return nil, err
 	}

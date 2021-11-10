@@ -69,7 +69,6 @@ type Change struct {
 	SubmitRecords []SubmitRecord `json:"submitRecords"`
 	// AllReviewers is a list of reviewers added to this change.
 	AllReviewers []Account `json:"allReviewers"`
-
 }
 
 // The bare Change-ID value is not always enough to identify a unique change. According to the
