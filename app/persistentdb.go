@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -317,9 +318,78 @@ func (ud *PersistentDB) GetConfigInt(ctx context.Context, key string, defaultVal
 func (ud *PersistentDB) JustGetConfigInt(ctx context.Context, key string, defaultValue int) int {
 	val, err := ud.GetConfigInt(ctx, key, defaultValue)
 	if err != nil {
-		ud.logger.Info("failed to retrieve value in config db", zap.String("key", key), zap.Error(err))
+		ud.logger.Info("failed to retrieve int value in config db", zap.String("key", key), zap.Error(err))
 	}
 	return val
+}
+
+func (ud *PersistentDB) GetConfigBool(ctx context.Context, key string, defaultValue bool) (bool, error) {
+	val, err := ud.GetConfig(ctx, key, "")
+	if err != nil || val == "" {
+		return defaultValue, err
+	}
+	val = strings.ToLower(val)
+	switch val {
+	case "yes", "y", "1", "on", "true", "t":
+		return true, nil
+	case "no", "n", "0", "off", "false", "f":
+		return false, nil
+	}
+	return defaultValue, fmt.Errorf("invalid boolean value %q", val)
+}
+
+func (ud *PersistentDB) JustGetConfigBool(ctx context.Context, key string, defaultValue bool) bool {
+	val, err := ud.GetConfigBool(ctx, key, defaultValue)
+	if err != nil {
+		ud.logger.Info("failed to retrieve bool value in config db", zap.String("key", key), zap.Error(err))
+	}
+	return val
+}
+
+func (ud *PersistentDB) GetConfigWildcard(ctx context.Context, pattern string) (items map[string]string, err error) {
+	ud.dbLock.Lock()
+	defer ud.dbLock.Unlock()
+
+	rows, err := ud.db.DB.QueryContext(ctx, ud.db.Rebind(`
+		SELECT config_key, config_value FROM team_configs
+		WHERE config_key LIKE ?
+	`), pattern)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		closeErr := rows.Close()
+		queryErr := rows.Err()
+		if err == nil {
+			if closeErr != nil {
+				err = closeErr
+			}
+			if queryErr != nil {
+				err = queryErr
+			}
+		}
+	}()
+
+	items = make(map[string]string)
+	for rows.Next() {
+		var key, val string
+		err = rows.Scan(&key, &val)
+		if err != nil {
+			return nil, err
+		}
+		items[key] = val
+	}
+	return items, nil
+}
+
+func (ud *PersistentDB) JustGetConfigWildcard(ctx context.Context, pattern string) map[string]string {
+
+	items, err := ud.GetConfigWildcard(ctx, pattern)
+	if err != nil {
+		ud.logger.Info("failed to retrieve config keys by pattern", zap.String("pattern", pattern), zap.Error(err))
+		return nil
+	}
+	return items
 }
 
 func (ud *PersistentDB) SetConfig(ctx context.Context, key, value string) error {

@@ -26,11 +26,6 @@ const (
 	// default hour (in 24-hour time) in each user's local time zone when their personal
 	// work needed report will be sent to them
 	defaultPersonalReportHour = 11
-	// default hour (in 24-hour time) in UTC when the daily report will be sent to the
-	// global-report-channel
-	defaultGlobalReportHour = 15
-	// Gerrit query to use for determining change sets with work needed for the global report
-	defaultWorkNeededQuery = "is:open -is:wip -label:Code-Review=-2 -label:Verified=-1"
 	// Gerrit query to use for determining change sets with reviews needed for a particular user
 	defaultPerUserReviewsNeededQuery = "reviewer:\"$username\" is:open -reviewedby:\"$username\" -owner:\"$username\" -is:wip -label:Verified=-1"
 )
@@ -45,7 +40,7 @@ var (
 
 const (
 	gerritQueryPageSize = 100
-	globalReportMaxSize = 100
+	teamReportMaxSize   = 100
 
 	workingDayStartHour = 9
 	workingDayEndHour   = 17
@@ -77,10 +72,7 @@ var configItems = []configItem{
 	{Name: "blocklist-ids", Description: "comma-separated list of chat IDs of users to avoid messaging", ItemType: ConfigItemUserList},
 	{Name: "remove-project-prefix", Description: "a common prefix on project names which can be removed if present before displaying in links (e.g., `myCompany/`)", ItemType: ConfigItemString},
 	{Name: "global-notify-channel", Description: "A channel to which all generally-applicable notifications should be sent", ItemType: ConfigItemChannel},
-	{Name: "global-report-channel", Description: "A channel to which a daily report will be sent, noting which change sets have been waiting too long and who they're waiting for", ItemType: ConfigItemChannel},
-	{Name: "global-report-hour", Description: "Hour (in 24-hour time) in UTC when the daily report will be sent to global-report-channel", ItemType: ConfigItemInt},
 	{Name: "personal-report-hour", Description: "Hour (in 24-hour time) in each user's local timezone when the daily review report should be sent, if they are online. If they are not online, the system will keep checking every hour during working hours.", ItemType: ConfigItemInt},
-	{Name: "work-needed-query", Description: "Gerrit query to use for determining change sets with work needed for the global report", ItemType: ConfigItemString},
 	{Name: "personal-reviews-needed-query", Description: "Gerrit query to use for determining change sets with reviews needed for a particular user", ItemType: ConfigItemString},
 	{Name: "jenkins-robot-user", Description: "Gerrit robot user that will post updates from Jenkins. If provided, these will be parsed and changed to display in a more helpful way", ItemType: ConfigItemString},
 	{Name: "jenkins-link-transformer", Description: "String transformation to apply to Jenkins links before passing them on. Looks like a sed subst command, but with $1 backreferences instead of \"\\1\"", ItemType: ConfigItemString},
@@ -98,7 +90,7 @@ type App struct {
 
 	reporterLock sync.Mutex
 
-	// a send is done on this channel when PeriodicGlobalReport may need to reread config
+	// a send is done on this channel when PeriodicTeamReports may need to reread report intervals
 	reconfigureChannel chan struct{}
 
 	// A common prefix on project names which can be removed if present before displaying in
@@ -271,13 +263,18 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 	case "!personal-reports":
 		logger.Info("admin requested unscheduled personal review reports")
 		a.PersonalReports(ctx, time.Now())
-	case "!global-report":
-		logger.Info("admin requested unscheduled global report")
-		chanID := a.persistentDB.JustGetConfig(ctx, "global-report-channel", "")
-		if chanID == "" {
-			return "No global report channel configured."
+	case "!team-report":
+		if len(parts) < 2 {
+			return "bad !team-report usage (`!team-report <reportname>`)"
 		}
-		a.GlobalReport(ctx, time.Now(), chanID)
+		reportName := parts[1]
+		logger.Info("admin requested unscheduled team report", zap.String("report-name", reportName))
+		report, err := a.getTeamReportConfig(ctx, reportName)
+		if err != nil {
+			return fmt.Sprintf("could not retrieve report config for %q: %v", reportName, err)
+		}
+		a.TeamReport(ctx, time.Now(), report)
+		return fmt.Sprintf("Report sent to %s", a.fmt.FormatChannelLink(report.ChannelID))
 	case "!assoc":
 		gerritUsername := ""
 		chatID := ""
@@ -410,14 +407,15 @@ func (a *App) setConfigItem(ctx context.Context, key, value string) error {
 	switch key {
 	case "remove-project-prefix":
 		a.removeProjectPrefix = value
-	case "global-report-hour":
-		a.reconfigureChannel <- struct{}{}
 	case "gerrit-server":
 		if err := a.ConfigureGerritServer(ctx, value); err != nil {
 			a.logger.Error("failed to open new gerrit client", zap.Error(err))
 			// but don't pass this error back to caller, as the config setting was successful
 		}
 	}
+	// Many changes in config might affect report timing, so wake up the report handler.
+	// It will reread relevant config.
+	a.reconfigureChannel <- struct{}{}
 
 	return nil
 }
@@ -1246,18 +1244,23 @@ func (a *App) lookupGerritUser(ctx context.Context, user *events.Account) string
 	return chatID
 }
 
-func (a *App) PeriodicGlobalReport(ctx context.Context, getTime func() time.Time) error {
-	chanID := a.persistentDB.JustGetConfig(ctx, "global-report-channel", "")
-	if chanID == "" {
-		// no global report configured
-		return nil
-	}
-	timer := time.NewTimer(a.nextGlobalReportTime(ctx, getTime()))
+type reportConfig struct {
+	Name           string
+	NextTime       time.Time
+	TimeOfDay      string
+	ChannelID      string
+	GerritQuery    string
+	SendOnWeekends bool
+}
+
+func (a *App) PeriodicTeamReports(ctx context.Context, getTime func() time.Time) error {
+	timeToNext, nextReport := a.nextTeamReport(ctx, getTime())
+	timer := time.NewTimer(timeToNext)
 
 	for {
 		select {
 		case t := <-timer.C:
-			a.GlobalReport(ctx, t, chanID)
+			a.TeamReport(ctx, t, nextReport)
 		case <-ctx.Done():
 			if !timer.Stop() {
 				<-timer.C
@@ -1265,20 +1268,87 @@ func (a *App) PeriodicGlobalReport(ctx context.Context, getTime func() time.Time
 			return ctx.Err()
 		case <-a.reconfigureChannel:
 		}
-		timer.Reset(a.nextGlobalReportTime(ctx, getTime()))
+		timeToNext, nextReport = a.nextTeamReport(ctx, getTime())
+		timer.Reset(timeToNext)
 	}
 }
 
-func (a *App) nextGlobalReportTime(ctx context.Context, now time.Time) time.Duration {
-	globalReportHour := a.persistentDB.JustGetConfigInt(ctx, "global-report-hour", defaultGlobalReportHour)
-	nextReport := time.Date(now.Year(), now.Month(), now.Day(), globalReportHour, 0, 0, 0, time.UTC)
+func (a *App) nextTeamReport(ctx context.Context, now time.Time) (timeToNext time.Duration, report reportConfig) {
+	// get information about all desired team reports
+	items := a.persistentDB.JustGetConfigWildcard(ctx, "reports.%.timeofday")
+	reports := make([]reportConfig, 0, len(items))
+	for reportKey, timeOfDay := range items {
+		if !strings.HasPrefix(reportKey, "reports.") || !strings.HasSuffix(reportKey, ".timeofday") {
+			// shouldn't be possible, but..
+			a.logger.Error("invalid report config key", zap.String("config-key", reportKey))
+			continue
+		}
+		reportName := reportKey[len("reports.") : len(reportKey)-len(".timeofday")]
+		reportTime, err := time.Parse("03:04", timeOfDay)
+		if err != nil {
+			a.logger.Warn("invalid report time of day", zap.String("report-name", reportName), zap.String("time-of-day", timeOfDay))
+			continue
+		}
+		weekends := a.persistentDB.JustGetConfigBool(ctx, "reports."+reportName+".weekends", false)
+		nextTime := determineNextTime(reportTime.Hour(), reportTime.Minute(), weekends, now)
+		reports = append(reports, reportConfig{
+			Name:           reportName,
+			NextTime:       nextTime,
+			TimeOfDay:      timeOfDay,
+			SendOnWeekends: weekends,
+		})
+	}
+	// identify the soonest one
+	sort.Slice(reports, func(i, j int) bool {
+		return reports[i].NextTime.Before(reports[j].NextTime)
+	})
+	// but really, we want the soonest one for which we can get the corresponding config
+	for _, r := range reports {
+		err := a.getTeamReportConfigPartial(ctx, r.Name, &r)
+		if err != nil {
+			a.logger.Warn("failed to get full report config", zap.String("report-name", reports[0].Name), zap.Error(err))
+			continue
+		}
+		return r.NextTime.Sub(now), r
+	}
+
+	// there were no configured team reports, or at least none that were configured correctly
+	// enough to send anything. we'll try re-reading the config in 24 hours' time.
+	return time.Hour * 24, reportConfig{}
+}
+
+func determineNextTime(reportHour, reportMin int, weekends bool, now time.Time) time.Time {
+	nextReport := time.Date(now.Year(), now.Month(), now.Day(), reportHour, reportMin, 0, 0, time.UTC)
 	if now.After(nextReport) {
 		nextReport = nextReport.AddDate(0, 0, 1)
 	}
-	for nextReport.Weekday() == time.Saturday || nextReport.Weekday() == time.Sunday {
-		nextReport = nextReport.AddDate(0, 0, 1)
+	if !weekends {
+		for nextReport.Weekday() == time.Saturday || nextReport.Weekday() == time.Sunday {
+			nextReport = nextReport.AddDate(0, 0, 1)
+		}
 	}
-	return nextReport.Sub(now)
+	return nextReport
+}
+
+func (a *App) getTeamReportConfig(ctx context.Context, reportName string) (reportConfig, error) {
+	conf := reportConfig{Name: reportName}
+	timeOfDay := a.persistentDB.JustGetConfig(ctx, "reports."+reportName+".timeofday", "")
+	if timeOfDay == "" {
+		return conf, fmt.Errorf("%q does not seem to be a valid report name", reportName)
+	}
+	conf.TimeOfDay = timeOfDay
+	weekends := a.persistentDB.JustGetConfigBool(ctx, "reports."+reportName+".weekends", false)
+	conf.SendOnWeekends = weekends
+	err := a.getTeamReportConfigPartial(ctx, reportName, &conf)
+	return conf, err
+}
+
+func (a *App) getTeamReportConfigPartial(ctx context.Context, reportName string, conf *reportConfig) error {
+	gerritQuery := a.persistentDB.JustGetConfig(ctx, "reports."+reportName+".gerrit-query", "")
+	conf.GerritQuery = gerritQuery
+	channelID := a.persistentDB.JustGetConfig(ctx, "reports."+reportName+".channel", "")
+	conf.ChannelID = channelID
+	return nil
 }
 
 func (a *App) PeriodicPersonalReports(ctx context.Context, getTime func() time.Time) error {
@@ -1302,25 +1372,24 @@ func (a *App) PeriodicPersonalReports(ctx context.Context, getTime func() time.T
 	}
 }
 
-func (a *App) GlobalReport(ctx context.Context, t time.Time, chanID string) {
+func (a *App) TeamReport(ctx context.Context, t time.Time, config reportConfig) {
 	defer func() {
 		rec := recover()
 		if rec != nil {
-			a.logger.Error("panic creating global report", zap.Any("panic-message", rec))
+			a.logger.Error("panic creating team report", zap.String("report-name", config.Name), zap.Any("panic-message", rec))
 		}
 	}()
 
-	logger := a.logger.With(zap.Time("global-report-start", t), zap.String("channel-id", chanID))
-	logger.Debug("initiating global current changeset report")
+	logger := a.logger.With(zap.Time("team-report-start", t), zap.String("report-name", config.Name), zap.String("channel-id", config.ChannelID))
+	logger.Debug("initiating team changeset report")
 	gerritClient := a.getGerritClient()
 	if gerritClient == nil {
 		logger.Info("skipping report- no gerrit client")
 		return
 	}
 
-	workNeededQuery := a.persistentDB.JustGetConfig(ctx, "work-needed-query", defaultWorkNeededQuery)
-	changes, more, err := gerritClient.QueryChangesEx(ctx, []string{workNeededQuery}, &gerrit.QueryChangesOpts{
-		Limit:                    globalReportMaxSize,
+	changes, more, err := gerritClient.QueryChangesEx(ctx, []string{config.GerritQuery}, &gerrit.QueryChangesOpts{
+		Limit:                    teamReportMaxSize,
 		DescribeLabels:           true,
 		DescribeDetailedLabels:   true,
 		DescribeCurrentRevision:  true,
@@ -1334,7 +1403,7 @@ func (a *App) GlobalReport(ctx context.Context, t time.Time, chanID string) {
 		logger.Error("failed to query changesets needing attention from Gerrit", zap.Error(err))
 		return
 	}
-	logger.Debug("global report processing change info", zap.Int("num-changes", len(changes)))
+	logger.Debug("team report processing change info", zap.Int("num-changes", len(changes)))
 	sort.Sort(byLastUpdateTime(changes))
 
 	var lines []string
@@ -1472,9 +1541,9 @@ changeLoop:
 		lines = append(lines, a.fmt.FormatItalic("More change sets awaiting action exist. List is too long!"))
 	}
 
-	logger.Debug("global report complete", zap.Int("num-lines", len(lines)))
+	logger.Debug("team report complete", zap.Int("num-lines", len(lines)))
 	caption := fmt.Sprintf("%d changesets waiting for review (%d waiting for over a week, %d waiting for over a month)", len(lines), countOverWeek, countOverMonth)
-	if _, err := a.chat.SendChannelReport(ctx, chanID, caption, lines); err != nil {
+	if _, err := a.chat.SendChannelReport(ctx, config.ChannelID, caption, lines); err != nil {
 		logger.Error("failed to send global message report", zap.Error(err))
 	}
 }

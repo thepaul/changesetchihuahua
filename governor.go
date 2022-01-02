@@ -172,7 +172,7 @@ func (t *Team) Run(ctx context.Context) {
 
 	var errGroup errgroup.Group
 	errGroup.Go(func() error {
-		return t.teamApp.PeriodicGlobalReport(ctx, time.Now)
+		return t.teamApp.PeriodicTeamReports(ctx, time.Now)
 	})
 	errGroup.Go(func() error {
 		return t.teamApp.PeriodicPersonalReports(ctx, time.Now)
