@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -295,7 +296,7 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 		return fmt.Sprintf("Ok, %s = %s", gerritUsername, a.fmt.FormatUserLink(chatID))
 	case "!config":
 		if len(parts) < 2 {
-			return "bad !config usage (`!config <key> [<value>]`)"
+			return a.formatAllConfigItems(ctx)
 		}
 		key := parts[1]
 		if len(parts) == 2 {
@@ -314,6 +315,32 @@ func (a *App) IncomingChatCommand(userID, chanID string, isDM bool, text string)
 		return "I don't understand that command."
 	}
 	return "Ok"
+}
+
+func (a *App) formatAllConfigItems(ctx context.Context) string {
+	type pair struct {
+		key string
+		val string
+	}
+	allConfig, err := a.persistentDB.GetAllConfigItems(ctx)
+	if err != nil {
+		a.logger.Error("failed to enumerate config items", zap.Error(err))
+	}
+
+	pairs := make([]pair, 0, len(allConfig))
+	for key, val := range allConfig {
+		pairs = append(pairs, pair{key: key, val: val})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		// can't have identical keys here
+		return pairs[i].key < pairs[j].key
+	})
+
+	var s bytes.Buffer
+	for _, pair := range pairs {
+		s.WriteString(fmt.Sprintf("%s = %s\n", a.fmt.FormatCode(pair.key), a.fmt.FormatCode(pair.val)))
+	}
+	return s.String()
 }
 
 func findConfigItem(key string) *configItem {
