@@ -413,6 +413,10 @@ func (f *Formatter) FormatLink(url, text string) string {
 	return fmt.Sprintf("<%s|%s>", url, escapeText(text))
 }
 
+func (f *Formatter) FormatCode(text string) string {
+	return fmt.Sprintf("`%s`", escapeText(text))
+}
+
 func (f *Formatter) UnwrapUserLink(userLink string) string {
 	if len(userLink) > 3 && userLink[0] == '<' && userLink[1] == '@' && userLink[len(userLink)-1] == '>' {
 		return userLink[2 : len(userLink)-1]

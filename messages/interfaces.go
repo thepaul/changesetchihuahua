@@ -47,6 +47,7 @@ type ChatSystemFormatter interface {
 	FormatChannelLink(channelID string) string
 	FormatUserLink(chatID string) string
 	FormatLink(url, text string) string
+	FormatCode(msg string) string
 	UnwrapUserLink(userLink string) string
 	UnwrapChannelLink(channelLink string) string
 	UnwrapLink(link string) string
