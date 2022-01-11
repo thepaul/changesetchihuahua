@@ -296,10 +296,10 @@ CREATE TABLE team_configs (
 	config_value text NOT NULL,
 	PRIMARY KEY ( config_key )
 );
-CREATE INDEX last_report_idx ON gerrit_users ( last_report );
-CREATE INDEX updated_at_idx ON inline_comments ( updated_at );
-CREATE INDEX patchset_announcement_project_name_change_num_patchset_num_idx ON patchset_announcements ( project_name, change_num, patchset_num );
-CREATE INDEX patchset_announcement_ts_idx ON patchset_announcements ( ts );`
+CREATE INDEX last_report_idx ON gerrit_users ( last_report ) ;
+CREATE INDEX updated_at_idx ON inline_comments ( updated_at ) ;
+CREATE INDEX patchset_announcement_project_name_change_num_patchset_num_idx ON patchset_announcements ( project_name, change_num, patchset_num ) ;
+CREATE INDEX patchset_announcement_ts_idx ON patchset_announcements ( ts ) ;`
 }
 
 func (obj *postgresDB) wrapTx(tx *sql.Tx) txMethods {
@@ -388,10 +388,10 @@ CREATE TABLE team_configs (
 	config_value TEXT NOT NULL,
 	PRIMARY KEY ( config_key )
 );
-CREATE INDEX last_report_idx ON gerrit_users ( last_report );
-CREATE INDEX updated_at_idx ON inline_comments ( updated_at );
-CREATE INDEX patchset_announcement_project_name_change_num_patchset_num_idx ON patchset_announcements ( project_name, change_num, patchset_num );
-CREATE INDEX patchset_announcement_ts_idx ON patchset_announcements ( ts );`
+CREATE INDEX last_report_idx ON gerrit_users ( last_report ) ;
+CREATE INDEX updated_at_idx ON inline_comments ( updated_at ) ;
+CREATE INDEX patchset_announcement_project_name_change_num_patchset_num_idx ON patchset_announcements ( project_name, change_num, patchset_num ) ;
+CREATE INDEX patchset_announcement_ts_idx ON patchset_announcements ( ts ) ;`
 }
 
 func (obj *sqlite3DB) wrapTx(tx *sql.Tx) txMethods {
@@ -1350,6 +1350,37 @@ func (obj *postgresImpl) Get_TeamConfig_ConfigValue_By_ConfigKey(ctx context.Con
 
 }
 
+func (obj *postgresImpl) All_TeamConfig(ctx context.Context) (
+	rows []*TeamConfig, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT team_configs.config_key, team_configs.config_value FROM team_configs")
+
+	var __values []interface{}
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	__rows, err := obj.driver.QueryContext(ctx, __stmt, __values...)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	defer __rows.Close()
+
+	for __rows.Next() {
+		team_config := &TeamConfig{}
+		err = __rows.Scan(&team_config.ConfigKey, &team_config.ConfigValue)
+		if err != nil {
+			return nil, obj.makeErr(err)
+		}
+		rows = append(rows, team_config)
+	}
+	if err := __rows.Err(); err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return rows, nil
+
+}
+
 func (obj *postgresImpl) All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNum_And_PatchsetNum(ctx context.Context,
 	patchset_announcement_project_name PatchsetAnnouncement_ProjectName_Field,
 	patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
@@ -1757,6 +1788,37 @@ func (obj *sqlite3Impl) Get_TeamConfig_ConfigValue_By_ConfigKey(ctx context.Cont
 		return (*ConfigValue_Row)(nil), obj.makeErr(err)
 	}
 	return row, nil
+
+}
+
+func (obj *sqlite3Impl) All_TeamConfig(ctx context.Context) (
+	rows []*TeamConfig, err error) {
+
+	var __embed_stmt = __sqlbundle_Literal("SELECT team_configs.config_key, team_configs.config_value FROM team_configs")
+
+	var __values []interface{}
+
+	var __stmt = __sqlbundle_Render(obj.dialect, __embed_stmt)
+	obj.logStmt(__stmt, __values...)
+
+	__rows, err := obj.driver.QueryContext(ctx, __stmt, __values...)
+	if err != nil {
+		return nil, obj.makeErr(err)
+	}
+	defer __rows.Close()
+
+	for __rows.Next() {
+		team_config := &TeamConfig{}
+		err = __rows.Scan(&team_config.ConfigKey, &team_config.ConfigValue)
+		if err != nil {
+			return nil, obj.makeErr(err)
+		}
+		rows = append(rows, team_config)
+	}
+	if err := __rows.Err(); err != nil {
+		return nil, obj.makeErr(err)
+	}
+	return rows, nil
 
 }
 
@@ -2168,6 +2230,15 @@ func (rx *Rx) All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNu
 	return tx.All_PatchsetAnnouncement_MessageHandle_By_ProjectName_And_ChangeNum_And_PatchsetNum(ctx, patchset_announcement_project_name, patchset_announcement_change_num, patchset_announcement_patchset_num)
 }
 
+func (rx *Rx) All_TeamConfig(ctx context.Context) (
+	rows []*TeamConfig, err error) {
+	var tx *Tx
+	if tx, err = rx.getTx(ctx); err != nil {
+		return
+	}
+	return tx.All_TeamConfig(ctx)
+}
+
 func (rx *Rx) CreateNoReturn_GerritUser(ctx context.Context,
 	gerrit_user_gerrit_username GerritUser_GerritUsername_Field,
 	gerrit_user_chat_id GerritUser_ChatId_Field,
@@ -2292,6 +2363,9 @@ type Methods interface {
 		patchset_announcement_change_num PatchsetAnnouncement_ChangeNum_Field,
 		patchset_announcement_patchset_num PatchsetAnnouncement_PatchsetNum_Field) (
 		rows []*MessageHandle_Row, err error)
+
+	All_TeamConfig(ctx context.Context) (
+		rows []*TeamConfig, err error)
 
 	CreateNoReturn_GerritUser(ctx context.Context,
 		gerrit_user_gerrit_username GerritUser_GerritUsername_Field,

@@ -281,6 +281,21 @@ func (ud *PersistentDB) RecordPatchSetAnnouncements(ctx context.Context, project
 	return allErrors
 }
 
+func (ud *PersistentDB) GetAllConfigItems(ctx context.Context) (map[string]string, error) {
+	ud.dbLock.Lock()
+	defer ud.dbLock.Unlock()
+
+	items, err := ud.db.All_TeamConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	itemsMap := make(map[string]string)
+	for _, item := range items {
+		itemsMap[item.ConfigKey] = item.ConfigValue
+	}
+	return itemsMap, nil
+}
+
 func (ud *PersistentDB) GetConfig(ctx context.Context, key, defaultValue string) (string, error) {
 	ud.dbLock.Lock()
 	defer ud.dbLock.Unlock()

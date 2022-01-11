@@ -71,6 +71,10 @@ update team_config (
     noreturn
 )
 
+read all (
+    select team_config
+)
+
 model patchset_announcement (
     key num
 
