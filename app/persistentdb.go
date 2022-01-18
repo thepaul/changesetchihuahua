@@ -313,7 +313,7 @@ func (ud *PersistentDB) GetConfig(ctx context.Context, key, defaultValue string)
 func (ud *PersistentDB) JustGetConfig(ctx context.Context, key, defaultValue string) string {
 	val, err := ud.GetConfig(ctx, key, defaultValue)
 	if err != nil {
-		ud.logger.Info("failed to retrieve value in config db", zap.String("key", key), zap.Error(err))
+		ud.logger.Error("failed to retrieve value in config db", zap.String("key", key), zap.Error(err))
 	}
 	return val
 }
@@ -401,7 +401,7 @@ func (ud *PersistentDB) JustGetConfigWildcard(ctx context.Context, pattern strin
 
 	items, err := ud.GetConfigWildcard(ctx, pattern)
 	if err != nil {
-		ud.logger.Info("failed to retrieve config keys by pattern", zap.String("pattern", pattern), zap.Error(err))
+		ud.logger.Error("failed to retrieve config keys by pattern", zap.String("pattern", pattern), zap.Error(err))
 		return nil
 	}
 	return items

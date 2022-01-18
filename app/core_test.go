@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -141,6 +142,8 @@ func (hu *hypotheticalUser) JSON() string {
 	return string(s)
 }
 
+const adminUserID = "fred"
+
 func testWithMockChat(t *testing.T, config map[string]string, testFunc func(*testSystem)) {
 	ctrl, ctx := gomock.WithContext(context.Background(), t)
 	defer ctrl.Finish()
@@ -163,7 +166,7 @@ func testWithMockChat(t *testing.T, config map[string]string, testFunc func(*tes
 	m.EXPECT().
 		GetInstallingUser(gomock.Any()).
 		Times(1).
-		Return("fred", nil)
+		Return(adminUserID, nil)
 
 	ts := &testSystem{
 		T:           t,
@@ -767,6 +770,44 @@ func TestReviewerAdded(t *testing.T) {
 			"type": "reviewer-added",
 			"eventCreatedOn": ` + strconv.FormatInt(eventTime.Add(time.Second).Unix(), 10) + `
 		}`)
+	})
+}
+
+func TestTeamReports(t *testing.T) {
+	testWithMockChat(t, map[string]string{
+		"gerrit-address":                       "https://gerrit.jorts.io",
+		"remove-project-prefix":                "jorts/",
+		"global-notify-channel":                "GLOBALNOTIFY",
+		"reports.testymctestface.timeofday":    time.Now().Add(-time.Second).UTC().Format("15:04:05.000"),
+		"reports.testymctestface.channel":      "channel1",
+		"reports.tootymctootface.channel":      "notthischannel",
+		"reports.testymctestface.weekends":     "true",
+		"reports.testymctestface.gerrit-query": "abc 123 +fourfive -foo",
+	}, func(ts *testSystem) {
+		// reconfigure the report send time to half a second from now, so we don't have
+		// to wait too long in the test
+		triggerTime := time.Now().Add(500 * time.Millisecond).UTC()
+		ts.App.IncomingChatCommand(adminUserID, "dunno", true, "!config reports.testymctestface.timeofday "+triggerTime.Format("15:04:05.000"))
+
+		ctx, cancel := context.WithTimeout(ts.Ctx, 5*time.Second)
+		defer cancel()
+
+		ts.MockGerrit.EXPECT().
+			QueryChangesEx(gomock.Any(), gomock.Eq([]string{"abc 123 +fourfive -foo"}), gomock.AssignableToTypeOf(&gerrit.QueryChangesOpts{})).
+			Times(1).
+			Return([]gerrit.ChangeInfo{}, false, nil)
+
+		ts.MockChat.EXPECT().
+			SendChannelReport(gomock.Any(), gomock.Eq("channel1"), gomock.Eq("0 changesets waiting for review (0 waiting for over a week, 0 waiting for over a month)"), gomock.Len(0)).
+			Times(1).
+			DoAndReturn(func(_ context.Context, channelID, caption string, lines []string) (messages.MessageHandle, error) {
+				// don't need to continue the test
+				cancel()
+				return nil, nil
+			})
+
+		err := ts.App.PeriodicTeamReports(ctx, time.Now)
+		assert.Equal(t, context.Canceled, err)
 	})
 }
 

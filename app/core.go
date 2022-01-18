@@ -28,6 +28,9 @@ const (
 	// default hour (in 24-hour time) in each user's local time zone when their personal
 	// work needed report will be sent to them
 	defaultPersonalReportHour = 11
+	// Gerrit query to use for determining change sets with work needed for a team report,
+	// unless the team report is otherwise configured
+	defaultWorkNeededQuery = "is:open -is:wip -label:Code-Review=-2 -label:Verified=-1"
 	// Gerrit query to use for determining change sets with reviews needed for a particular user
 	defaultPerUserReviewsNeededQuery = "reviewer:\"$username\" is:open -reviewedby:\"$username\" -owner:\"$username\" -is:wip -label:Verified=-1"
 )
@@ -60,6 +63,7 @@ const (
 	ConfigItemChannel
 	ConfigItemUserList
 	ConfigItemLink
+	ConfigItemBool
 )
 
 type configItem struct {
@@ -79,6 +83,10 @@ var configItems = []configItem{
 	{Name: "personal-reviews-needed-query", Description: "Gerrit query to use for determining change sets with reviews needed for a particular user", ItemType: ConfigItemString},
 	{Name: "jenkins-robot-user", Description: "Gerrit robot user that will post updates from Jenkins. If provided, these will be parsed and changed to display in a more helpful way", ItemType: ConfigItemString},
 	{Name: "jenkins-link-transformer", Description: "String transformation to apply to Jenkins links before passing them on. Looks like a sed subst command, but with $1 backreferences instead of \"\\1\"", ItemType: ConfigItemString},
+	{Name: "reports.*.timeofday", Description: "The time of day (in 24-hour time HH:MM format, in UTC) when the named report should be sent each day", ItemType: ConfigItemString, IsWildcard: true},
+	{Name: "reports.*.weekends", Description: "Whether the named report should be sent on weekends", ItemType: ConfigItemBool, IsWildcard: true},
+	{Name: "reports.*.gerrit-query", Description: "Gerrit query to use for determining change sets with work needed for the named report", ItemType: ConfigItemString, IsWildcard: true},
+	{Name: "reports.*.channel", Description: "The channel to which the named report will be sent, noting which change sets have been waiting too long and who they're waiting for", ItemType: ConfigItemChannel, IsWildcard: true},
 }
 
 type App struct {
@@ -1308,7 +1316,13 @@ func (a *App) PeriodicTeamReports(ctx context.Context, getTime func() time.Time)
 
 func (a *App) nextTeamReport(ctx context.Context, now time.Time) (timeToNext time.Duration, report reportConfig) {
 	// get information about all desired team reports
-	items := a.persistentDB.JustGetConfigWildcard(ctx, "reports.%.timeofday")
+	items, err := a.persistentDB.GetConfigWildcard(ctx, "reports.%.timeofday")
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			a.logger.Error("failed to retrieve config items by wildcard", zap.Error(err))
+		}
+		return time.Hour * 24, reportConfig{}
+	}
 	reports := make([]reportConfig, 0, len(items))
 	for reportKey, timeOfDay := range items {
 		if !strings.HasPrefix(reportKey, "reports.") || !strings.HasSuffix(reportKey, ".timeofday") {
@@ -1317,13 +1331,19 @@ func (a *App) nextTeamReport(ctx context.Context, now time.Time) (timeToNext tim
 			continue
 		}
 		reportName := reportKey[len("reports.") : len(reportKey)-len(".timeofday")]
-		reportTime, err := time.Parse("03:04", timeOfDay)
+		numColons := strings.Count(timeOfDay, ":")
+		timeFormat := "15:04"
+		if numColons == 2 {
+			timeFormat = "15:04:05"
+		}
+		reportTime, err := time.Parse(timeFormat, timeOfDay)
 		if err != nil {
 			a.logger.Warn("invalid report time of day", zap.String("report-name", reportName), zap.String("time-of-day", timeOfDay))
 			continue
 		}
 		weekends := a.persistentDB.JustGetConfigBool(ctx, "reports."+reportName+".weekends", false)
-		nextTime := determineNextTime(reportTime.Hour(), reportTime.Minute(), weekends, now)
+		nextTime := determineNextTime(reportTime, weekends, now)
+		a.logger.Debug("calculated next report time", zap.String("report-name", reportName), zap.Time("next-report-at", nextTime))
 		reports = append(reports, reportConfig{
 			Name:           reportName,
 			NextTime:       nextTime,
@@ -1350,8 +1370,9 @@ func (a *App) nextTeamReport(ctx context.Context, now time.Time) (timeToNext tim
 	return time.Hour * 24, reportConfig{}
 }
 
-func determineNextTime(reportHour, reportMin int, weekends bool, now time.Time) time.Time {
-	nextReport := time.Date(now.Year(), now.Month(), now.Day(), reportHour, reportMin, 0, 0, time.UTC)
+func determineNextTime(reportTime time.Time, weekends bool, now time.Time) time.Time {
+	now = now.UTC()
+	nextReport := time.Date(now.Year(), now.Month(), now.Day(), reportTime.Hour(), reportTime.Minute(), reportTime.Second(), reportTime.Nanosecond(), time.UTC)
 	if now.After(nextReport) {
 		nextReport = nextReport.AddDate(0, 0, 1)
 	}
@@ -1365,21 +1386,33 @@ func determineNextTime(reportHour, reportMin int, weekends bool, now time.Time) 
 
 func (a *App) getTeamReportConfig(ctx context.Context, reportName string) (reportConfig, error) {
 	conf := reportConfig{Name: reportName}
-	timeOfDay := a.persistentDB.JustGetConfig(ctx, "reports."+reportName+".timeofday", "")
+	timeOfDay, err := a.persistentDB.GetConfig(ctx, "reports."+reportName+".timeofday", "")
+	if err != nil {
+		return conf, err
+	}
 	if timeOfDay == "" {
 		return conf, fmt.Errorf("%q does not seem to be a valid report name", reportName)
 	}
 	conf.TimeOfDay = timeOfDay
-	weekends := a.persistentDB.JustGetConfigBool(ctx, "reports."+reportName+".weekends", false)
+	weekends, err := a.persistentDB.GetConfigBool(ctx, "reports."+reportName+".weekends", false)
+	if err != nil {
+		return conf, err
+	}
 	conf.SendOnWeekends = weekends
-	err := a.getTeamReportConfigPartial(ctx, reportName, &conf)
+	err = a.getTeamReportConfigPartial(ctx, reportName, &conf)
 	return conf, err
 }
 
 func (a *App) getTeamReportConfigPartial(ctx context.Context, reportName string, conf *reportConfig) error {
-	gerritQuery := a.persistentDB.JustGetConfig(ctx, "reports."+reportName+".gerrit-query", "")
+	gerritQuery, err := a.persistentDB.GetConfig(ctx, "reports."+reportName+".gerrit-query", defaultWorkNeededQuery)
+	if err != nil {
+		return err
+	}
 	conf.GerritQuery = gerritQuery
-	channelID := a.persistentDB.JustGetConfig(ctx, "reports."+reportName+".channel", "")
+	channelID, err := a.persistentDB.GetConfig(ctx, "reports."+reportName+".channel", "")
+	if err != nil {
+		return err
+	}
 	conf.ChannelID = channelID
 	return nil
 }
@@ -1831,7 +1864,7 @@ func (a *App) isGoodTimeForReport(ctx context.Context, _ *gerrit.AccountInfo, _ 
 	return hour >= personalReportHour
 }
 
-var usernameVarRegex = regexp.MustCompile(`\$(username\b|\{username})`)
+var usernameVarRegex = regexp.MustCompile(`\$(username\b|{username})`)
 
 func (a *App) allPendingReviewsFor(ctx context.Context, gerritUsername, query string) ([]gerrit.ChangeInfo, error) {
 	queryString := usernameVarRegex.ReplaceAllString(query, gerritUsername)
