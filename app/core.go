@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -65,6 +66,7 @@ type configItem struct {
 	Name        string
 	Description string
 	ItemType    configItemType
+	IsWildcard  bool
 }
 
 var configItems = []configItem{
@@ -345,7 +347,11 @@ func (a *App) formatAllConfigItems(ctx context.Context) string {
 
 func findConfigItem(key string) *configItem {
 	for _, configDef := range configItems {
-		if configDef.Name == key {
+		if configDef.IsWildcard {
+			if ok, _ := filepath.Match(configDef.Name, key); ok {
+				return &configDef
+			}
+		} else if configDef.Name == key {
 			return &configDef
 		}
 	}
