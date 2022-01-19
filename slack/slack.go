@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/jtolds/changesetchihuahua/messages"
+	"github.com/storj/changesetchihuahua/messages"
 )
 
 var (

@@ -20,7 +20,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/jtolds/changesetchihuahua/app/dbx"
+	"github.com/storj/changesetchihuahua/app/dbx"
 )
 
 //go:generate go-bindata -pkg app -prefix migrations -modtime 1574794364 -mode 420 -o migrations.go -ignore=/\. migrations/

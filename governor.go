@@ -16,10 +16,10 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/jtolds/changesetchihuahua/app"
-	"github.com/jtolds/changesetchihuahua/gerrit"
-	"github.com/jtolds/changesetchihuahua/gerrit/events"
-	"github.com/jtolds/changesetchihuahua/slack"
+	"github.com/storj/changesetchihuahua/app"
+	"github.com/storj/changesetchihuahua/gerrit"
+	"github.com/storj/changesetchihuahua/gerrit/events"
+	"github.com/storj/changesetchihuahua/slack"
 )
 
 var notificationTimeout = flag.Duration("notify-timeout", time.Minute*30, "Maximum amount of time to spend trying to deliver a notification")

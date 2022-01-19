@@ -18,10 +18,10 @@ import (
 	"github.com/zeebo/errs"
 	"go.uber.org/zap"
 
-	"github.com/jtolds/changesetchihuahua/gerrit"
-	"github.com/jtolds/changesetchihuahua/gerrit/events"
-	"github.com/jtolds/changesetchihuahua/messages"
-	"github.com/jtolds/changesetchihuahua/slack"
+	"github.com/storj/changesetchihuahua/gerrit"
+	"github.com/storj/changesetchihuahua/gerrit/events"
+	"github.com/storj/changesetchihuahua/messages"
+	"github.com/storj/changesetchihuahua/slack"
 )
 
 const (

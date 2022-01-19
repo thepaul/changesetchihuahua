@@ -17,15 +17,15 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/jtolds/changesetchihuahua/app"
-	"github.com/jtolds/changesetchihuahua/gerrit"
-	"github.com/jtolds/changesetchihuahua/gerrit/events"
-	"github.com/jtolds/changesetchihuahua/messages"
-	"github.com/jtolds/changesetchihuahua/slack"
+	"github.com/storj/changesetchihuahua/app"
+	"github.com/storj/changesetchihuahua/gerrit"
+	"github.com/storj/changesetchihuahua/gerrit/events"
+	"github.com/storj/changesetchihuahua/messages"
+	"github.com/storj/changesetchihuahua/slack"
 )
 
-//go:generate mockgen -destination messages_mocks_test.go -package app_test github.com/jtolds/changesetchihuahua/slack EventedChatSystem
-//go:generate mockgen -destination gerrit_mocks_test.go -package app_test github.com/jtolds/changesetchihuahua/gerrit Client
+//go:generate mockgen -destination messages_mocks_test.go -package app_test github.com/storj/changesetchihuahua/slack EventedChatSystem
+//go:generate mockgen -destination gerrit_mocks_test.go -package app_test github.com/storj/changesetchihuahua/gerrit Client
 
 type testSystem struct {
 	T           *testing.T

@@ -16,8 +16,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/jtolds/changesetchihuahua/gerrit/events"
-	"github.com/jtolds/changesetchihuahua/slack"
+	"github.com/storj/changesetchihuahua/gerrit/events"
+	"github.com/storj/changesetchihuahua/slack"
 )
 
 var (

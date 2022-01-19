@@ -1,4 +1,4 @@
-module github.com/jtolds/changesetchihuahua
+module github.com/storj/changesetchihuahua
 
 go 1.13
 
